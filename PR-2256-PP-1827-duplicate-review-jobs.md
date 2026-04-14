@@ -167,6 +167,7 @@ Alternatively, the modal component could disable the confirm button after the fi
 ## Recommendation
 
 **Approve with suggestions**
-1. **Add logging** in `addNewJobs.ts` when a duplicate is blocked (consistency with `addJobWithTasks.ts`)
-2. **Add tests** for `addNewJobs.ts` duplicate prevention logic
-3. **Consider caching** `fetchJobsByOrderId` results in the bulk loop to avoid redundant API calls (low priority — unlikely to cause issues in practice)
+1. **Add disabled/loading state** to the deadline warning modal confirm button so users get visual feedback while the job is being created
+2. **Add logging** in `addNewJobs.ts` when a duplicate is blocked (consistency with `addJobWithTasks.ts`)
+3. **Add tests** for `addNewJobs.ts` duplicate prevention logic
+4. **Consider caching** `fetchJobsByOrderId` results in the bulk loop to avoid redundant API calls (low priority — unlikely to cause issues in practice)
