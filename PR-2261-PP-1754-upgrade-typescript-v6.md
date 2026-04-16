@@ -307,12 +307,82 @@ const ft = await fileTypeFromBuffer(header);
 
 ---
 
+## Side-Effects Analysis
+
+Deep analysis of every major version bump for runtime side effects, missed migration spots, and dependency declaration issues.
+
+### Issues Found (action needed)
+
+#### HIGH — Must fix before merge
+
+| # | Package | Issue | File(s) |
+|---|---|---|---|
+| 1 | **iron-session 6→8** | `iron-session` is only declared in `creative-portal/package.json`, but it's imported directly in `packages/shared` (session.ts, withApiMiddleware, login, MFA, etc.) and `customer-portal`. Relies on Yarn hoisting — fragile. | `packages/shared/package.json`, `apps/customer-portal/package.json` |
+| 2 | **Sentry 7→10** | `wrapApiHandlerWithSentry` may be removed/no-op in v10. Used in `withApiMiddleware.ts` (line 6, 131). If removed at import time, all API routes break. | `packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts` |
+| 3 | **react-dropzone** | Version mismatch — creative-portal declares `^14.2.2`, shared declares `^15.0.0`. Yarn hoisting may mask this but it's fragile. | `apps/creative-portal/package.json` vs `packages/shared/package.json` |
+
+#### MEDIUM — Should fix
+
+| # | Package | Issue | File(s) |
+|---|---|---|---|
+| 4 | **Sentry 7→10** | Deprecated `withSentryConfig` options (`transpileClientSDK`, `autoInstrumentServerFunctions`) — silently ignored in v10 but should be cleaned up. | `packages/shared/scripts/nextConfig.js` |
+| 5 | **Sentry 7→10** | Stale `@sentry/nextjs` mock still exports old `getContext()` API instead of `getScopeData()`. New tests using this mock will get wrong shape. | `packages/shared/__mocks__/@sentry/nextjs.ts` |
+| 6 | **axios 0.27→1** | `AxiosRequestHeaders` cast on `{orgId?: number}` in `services/customers/index.tsx`. The type changed in v1 — this cast is dubious. | `apps/creative-portal/services/customers/index.tsx` |
+| 7 | **@types/react-datepicker** | Still at `^6.0.0` but react-datepicker v9 bundles its own types. Stale `@types` may conflict. | `apps/customer-portal/package.json` |
+| 8 | **file-type 19→22** | `readFileSync(entireFile)` for MIME detection — should read only first 4KB to avoid OOM on large uploads. | `packages/shared/utils/files/processWorkItemContentWithMetadata.ts` |
+
+#### LOW — Nice to fix
+
+| # | Package | Issue | File(s) |
+|---|---|---|---|
+| 9 | **stream-json 1→2** | Zero source imports — unused dependency. | `apps/customer-portal/package.json` |
+| 10 | **file-type** | Declared in customer-portal but no imports found there — unused. | `apps/customer-portal/package.json` |
+| 11 | **muhammara 5→6** | Native binary rebuild — test PDF metadata injection in dev. | N/A |
+
+### Clean — No side effects found
+
+| Package | Verdict |
+|---|---|
+| **swiper 8→11** | All props valid, `Mousewheel` import path updated, CSS paths correct |
+| **react-toastify 9→10** | All enum references migrated to string literals, 0 remaining |
+| **framer-motion 11→12** | All transition types valid (`"spring"`, `"tween"`, `ease: "easeInOut"/"linear"`) |
+| **date-fns 2→4 + date-fns-tz 2→3** | All 20+ files migrated (named imports, `toZonedTime`/`fromZonedTime`), 0 old names remaining |
+| **recharts 2→3** | All chart components compatible, tick prop updated |
+| **formidable 2→3** | All file access patterns already handle v3 array semantics |
+| **stripe 14→22 + @stripe/stripe-js 2→9** | Identity API stable, `loadStripe`/`verifyIdentity` unchanged |
+| **cookie 0.6→1.1.1** | Cookie names are simple `trustBrowser-{userId}` — passes v1 validation |
+| **react-avatar-editor 13→15** | Already using v15 `AvatarEditorRef` type |
+| **googleapis 136→171** | Stable Google API methods (Drive v3, Docs, Sheets, Slides) |
+| **iron-session code migration** | All 23+ files correctly migrated from HOC wrappers to `getIronSession()` |
+| **axios code migration** | `onUploadProgress.total` optional, numeric status checks, no `CancelToken` usage |
+| **dotenv, cross-env, husky, lint-staged** | Config/dev-only, no runtime impact |
+| **react-datepicker 6→9** | Only 1 usage site, all props valid (`selected`, `onChange`, `selectsRange`, `inline`, etc.) |
+| **y-websocket 2→3** | Provider API unchanged |
+| **Rollup plugins** | Plugin APIs backward-compatible for current config |
+
+### Recommended priority order
+
+1. **Verify `wrapApiHandlerWithSentry` exists in v10** — if not, remove the import and wrapping (auto-instrumentation handles it)
+2. **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`**
+3. **Align react-dropzone** — bump creative-portal to `^15.0.0` to match shared
+4. **Remove `@types/react-datepicker`** from customer-portal
+5. **Fix `readFileSync` for MIME detection** — read only first 4KB
+6. **Clean up Sentry mock** and deprecated `nextConfig.js` options
+7. **Remove unused deps** (`stream-json`, `file-type` in customer-portal)
+
+---
+
 ## Recommendation
 
 **Approve with suggestions**
 
-1. **Fix `readFileSync` for MIME detection** (Issue #1) — read only the first 4KB instead of the entire file to avoid OOM on large uploads. This is the only issue with real production risk.
-2. **Remove `@types/react-datepicker`** (Issue #2) — react-datepicker v9 ships its own types; the stale `@types` package may cause confusing conflicts.
-3. **Manual QA the test plan items** before merging — especially swiper carousel behavior, toast notification styling, and Google Picker flow.
-4. **Document scope expansion on the Jira ticket** — the PR goes well beyond the ticket's stated scope (justified, but should be documented for traceability).
-5. **Note Storybook deferral** — explicitly mark Jira requirement #2 as deferred to a separate ticket.
+1. **Verify `wrapApiHandlerWithSentry` in Sentry v10** — if removed, all API routes break. Remove the import and wrapping if auto-instrumentation handles it.
+2. **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`** — currently relies on Yarn hoisting from creative-portal.
+3. **Align react-dropzone versions** — creative-portal `^14.2.2` vs shared `^15.0.0`. Bump creative-portal to `^15.0.0`.
+4. **Fix `readFileSync` for MIME detection** — read only the first 4KB instead of the entire file to avoid OOM on large uploads.
+5. **Remove `@types/react-datepicker`** from customer-portal — react-datepicker v9 ships its own types.
+6. **Clean up Sentry config** — remove deprecated `transpileClientSDK` and `autoInstrumentServerFunctions` options, update stale mock.
+7. **Remove unused deps** — `stream-json` and `file-type` in customer-portal have zero source imports.
+8. **Manual QA the test plan items** before merging — especially swiper carousel, toast notifications, iron-session login/logout flows, and Sentry error capture.
+9. **Document scope expansion on the Jira ticket** — the PR goes well beyond the ticket's stated scope (justified, but should be documented for traceability).
+10. **Note Storybook deferral** — explicitly mark Jira requirement #2 as deferred to a separate ticket.
