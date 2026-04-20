@@ -4,6 +4,8 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1754
 **Status:** In Progress
 
+> **Update (2026-04-20):** Sentry 7 → 10 upgrade has been reverted on this branch (commits `05c364a1a`, `7e5cd7c63`). `@sentry/nextjs` and `@sentry/types` are back at `7.73.0`. All Sentry-related review items below are retained for history but marked **[STALE — Sentry reverted]** where they no longer apply.
+
 ---
 
 ## Jira Requirements vs Implementation
@@ -14,12 +16,12 @@
 | Upgrade Turborepo | 2.3.3 → 2.9.6 | ✅ Addressed |
 | Upgrade Playwright | 1.45.1 → 1.59.1 | ✅ Addressed |
 | Resolve `@types/node` mismatch | Set `types: ["node"]` in base tsconfig, explicit per-workspace `types` | ✅ Addressed |
-| Sentry config: disable client SDK transpilation | `transpileClientSDK: false` in `nextConfig.js` | ✅ Addressed |
+| Sentry config: disable client SDK transpilation | **[STALE — Sentry reverted]** Sentry remains on v7; `transpileClientSDK: true` kept as the v7 default | ⚠️ N/A |
 | Storybook alignment (remove alpha, align versions) | Not addressed in this PR | ❌ Missing |
 | All packages must build and test successfully | PR description says typecheck/build/test all pass | ✅ Addressed |
 
 **Scope beyond Jira ticket:**
-- Sentry 7 → 10 upgrade (major, with OpenTelemetry integration)
+- ~~Sentry 7 → 10 upgrade (major, with OpenTelemetry integration)~~ **[REVERTED]** — kept on v7
 - axios 0.27 → 1
 - date-fns 2 → 4 + date-fns-tz v3
 - iron-session 6 → 8
@@ -44,7 +46,7 @@ The approach is sound:
 - **Library migrations** are consistent across all workspaces (date-fns-tz renames, iron-session API migration, Sentry v10 functional integration API)
 - **Code fixes** are minimal and targeted (import path corrections, type assertion fixes for stricter inference)
 
-The highest-risk changes are swiper 8→11 (visual/behavioral), Sentry 7→10 (completely new architecture), and the `moduleResolution` switch (affects all import resolution).
+The highest-risk changes are swiper 8→11 (visual/behavioral) and the `moduleResolution` switch (affects all import resolution). ~~Sentry 7→10~~ **[REVERTED]** — no longer a risk factor.
 
 ---
 
@@ -55,6 +57,7 @@ The highest-risk changes are swiper 8→11 (visual/behavioral), Sentry 7→10 (c
 **[File: packages/shared/utils/files/processWorkItemContentWithMetadata.ts]**
 **Function/Class:** processWorkItemContentWithMetadata (streaming path, line 137)
 **Severity:** medium
+**Status:** ✅ Resolved — replaced `readFileSync` with `openSync`/`readSync` reading only first 4100 bytes
 **Problem:** After streaming a file to disk via `Base64DecodeStream`, the code reads the entire file back into memory with `readFileSync(tempFilePath)` just to detect the MIME type. The previous `fileTypeFromFile` was streaming-based and only read the file header. For large files (100MB+ PDFs or ZIPs), this causes unnecessary memory pressure.
 **Impact:** Potential OOM on large file uploads in the streaming code path. The base64 string path (line 147) doesn't have this issue since the buffer is already in memory.
 **Fix:** Read only the first 4100 bytes — that's all `file-type` needs for magic number detection:
@@ -74,6 +77,7 @@ const ft = await fileTypeFromBuffer(header);
 **[File: apps/customer-portal/package.json]**
 **Function/Class:** N/A (package.json)
 **Severity:** medium
+**Status:** ✅ Resolved — removed `@types/react-datepicker` from customer-portal devDependencies
 **Problem:** `@types/react-datepicker` is at `^6.0.0` but `react-datepicker` was bumped to `^9.1.0`. Starting from v7, react-datepicker bundles its own TypeScript types. The stale `@types` package may provide conflicting type definitions.
 **Impact:** Could cause confusing type errors or mask API changes in react-datepicker v9.
 **Fix:** Remove `@types/react-datepicker` from devDependencies — react-datepicker v9 ships its own types.
@@ -83,6 +87,7 @@ const ft = await fileTypeFromBuffer(header);
 **[File: apps/customer-portal/components/organisms/OrderCreation/index.tsx]**
 **Function/Class:** OrderCreation component
 **Severity:** low
+**Status:** ✅ Resolved — changed fallback to `"Untitled"`
 **Problem:** `(file.name ?? "").substring(...)` uses `""` as fallback when `file.name` is undefined (google.picker v0.0.52 made `name` nullable). This could create a document with an empty `title`.
 **Impact:** If a Google Picker document has no `name`, the file would be created with an empty title.
 **Fix:** Consider using a fallback like `"Untitled"` instead of `""`.
@@ -92,6 +97,7 @@ const ft = await fileTypeFromBuffer(header);
 **[File: apps/customer-portal/components/pages/reports/usage/partials/UsageChart/index.tsx]**
 **Function/Class:** UsageChart
 **Severity:** low
+**Status:** ✅ Resolved — replaced casts with recharts' exported `YAxisTickContentProps` type; values explicitly coerced with `Number(...)` at the call boundary
 **Problem:** Recharts v3 `tick` prop migration uses `as number` and `as { value: number }` casts that bypass type safety.
 **Impact:** Low — recharts tick API is stable, but fragile if upgraded again.
 **Fix:** Consider using recharts' exported `TickProps` type instead of casts.
@@ -101,6 +107,7 @@ const ft = await fileTypeFromBuffer(header);
 **[File: apps/customer-portal/package.json]**
 **Function/Class:** N/A (package.json)
 **Severity:** low
+**Status:** ⬜ Deferred to PP-1752 (as originally planned) — `core-js`, `node-fetch`, `@types/node-fetch`, `@mdx-js/react` still present; scope of PP-1754 not expanded
 **Problem:** `core-js`, `node-fetch`, `@types/node-fetch` still listed despite `IMPROVEMENTS.md` flagging them as dead/phantom. `@mdx-js/react: "1"` also still in creative-portal.
 **Impact:** Unnecessary bundle bloat.
 **Fix:** Deferred to PP-1752 as planned — ensure that ticket tracks these explicitly.
@@ -110,6 +117,7 @@ const ft = await fileTypeFromBuffer(header);
 **[File: N/A]**
 **Function/Class:** N/A
 **Severity:** low
+**Status:** ⬜ Deferred to a separate Storybook ticket (as noted in PR description); Jira PP-1754 still needs explicit update
 **Problem:** Jira ticket requirement #2 ("Remove alpha version of Storybook, align Storybook version across all portals") is not addressed.
 **Impact:** Jira requirement gap.
 **Fix:** PR description already notes "Storybook 8 — out of scope, separate tickets". Update the Jira ticket to reflect this deferral explicitly.
@@ -315,29 +323,29 @@ Deep analysis of every major version bump for runtime side effects, missed migra
 
 #### HIGH — Must fix before merge
 
-| # | Package | Issue | File(s) |
-|---|---|---|---|
-| 1 | **iron-session 6→8** | `iron-session` is only declared in `creative-portal/package.json`, but it's imported directly in `packages/shared` (session.ts, withApiMiddleware, login, MFA, etc.) and `customer-portal`. Relies on Yarn hoisting — fragile. | `packages/shared/package.json`, `apps/customer-portal/package.json` |
-| 2 | **Sentry 7→10** | `wrapApiHandlerWithSentry` may be removed/no-op in v10. Used in `withApiMiddleware.ts` (line 6, 131). If removed at import time, all API routes break. | `packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts` |
-| 3 | **react-dropzone** | Version mismatch — creative-portal declares `^14.2.2`, shared declares `^15.0.0`. Yarn hoisting may mask this but it's fragile. | `apps/creative-portal/package.json` vs `packages/shared/package.json` |
+| # | Package | Issue | File(s) | Status |
+|---|---|---|---|---|
+| 1 | **iron-session 6→8** | `iron-session` is only declared in `creative-portal/package.json`, but it's imported directly in `packages/shared` (session.ts, withApiMiddleware, login, MFA, etc.) and `customer-portal`. Relies on Yarn hoisting — fragile. | `packages/shared/package.json`, `apps/customer-portal/package.json` | ✅ Resolved — added `iron-session: ^8.0.4` to both `packages/shared/package.json` and `apps/customer-portal/package.json` |
+| 2 | ~~**Sentry 7→10**~~ **[STALE — Sentry reverted]** | `wrapApiHandlerWithSentry` exists in v7 — no longer a concern since Sentry stayed on 7.73.0. | `packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts` | ⚠️ N/A (stale) |
+| 3 | **react-dropzone** | Version mismatch — creative-portal declares `^14.2.2`, shared declares `^15.0.0`. Yarn hoisting may mask this but it's fragile. | `apps/creative-portal/package.json` vs `packages/shared/package.json` | ✅ Resolved — bumped creative-portal `react-dropzone` to `^15.0.0` |
 
 #### MEDIUM — Should fix
 
-| # | Package | Issue | File(s) |
-|---|---|---|---|
-| 4 | **Sentry 7→10** | Deprecated `withSentryConfig` options (`transpileClientSDK`, `autoInstrumentServerFunctions`) — silently ignored in v10 but should be cleaned up. | `packages/shared/scripts/nextConfig.js` |
-| 5 | **Sentry 7→10** | Stale `@sentry/nextjs` mock still exports old `getContext()` API instead of `getScopeData()`. New tests using this mock will get wrong shape. | `packages/shared/__mocks__/@sentry/nextjs.ts` |
-| 6 | **axios 0.27→1** | `AxiosRequestHeaders` cast on `{orgId?: number}` in `services/customers/index.tsx`. The type changed in v1 — this cast is dubious. | `apps/creative-portal/services/customers/index.tsx` |
-| 7 | **@types/react-datepicker** | Still at `^6.0.0` but react-datepicker v9 bundles its own types. Stale `@types` may conflict. | `apps/customer-portal/package.json` |
-| 8 | **file-type 19→22** | `readFileSync(entireFile)` for MIME detection — should read only first 4KB to avoid OOM on large uploads. | `packages/shared/utils/files/processWorkItemContentWithMetadata.ts` |
+| # | Package | Issue | File(s) | Status |
+|---|---|---|---|---|
+| 4 | ~~**Sentry 7→10**~~ **[STALE — Sentry reverted]** | `transpileClientSDK` / `autoInstrumentServerFunctions` are valid v7 options — no action needed. | `packages/shared/scripts/nextConfig.js` | ⚠️ N/A (stale) |
+| 5 | ~~**Sentry 7→10**~~ **[STALE — Sentry reverted]** | `getContext()` is the correct v7 mock API — no action needed. | `packages/shared/__mocks__/@sentry/nextjs.ts` | ⚠️ N/A (stale) |
+| 6 | **axios 0.27→1** | `AxiosRequestHeaders` cast on `{orgId?: number}` in `services/customers/index.tsx`. The type changed in v1 — this cast is dubious. | `apps/creative-portal/services/customers/index.tsx` | ✅ Resolved — removed `AxiosRequestHeaders` cast; stringify `orgId`/`orgGroupId` before passing as headers |
+| 7 | **@types/react-datepicker** | Still at `^6.0.0` but react-datepicker v9 bundles its own types. Stale `@types` may conflict. | `apps/customer-portal/package.json` | ✅ Resolved — removed `@types/react-datepicker` from customer-portal devDependencies |
+| 8 | **file-type 19→22** | `readFileSync(entireFile)` for MIME detection — should read only first 4KB to avoid OOM on large uploads. | `packages/shared/utils/files/processWorkItemContentWithMetadata.ts` | ✅ Resolved — replaced with `openSync`+`readSync` reading only first 4100 bytes |
 
 #### LOW — Nice to fix
 
-| # | Package | Issue | File(s) |
-|---|---|---|---|
-| 9 | **stream-json 1→2** | Zero source imports — unused dependency. | `apps/customer-portal/package.json` |
-| 10 | **file-type** | Declared in customer-portal but no imports found there — unused. | `apps/customer-portal/package.json` |
-| 11 | **muhammara 5→6** | Native binary rebuild — test PDF metadata injection in dev. | N/A |
+| # | Package | Issue | File(s) | Status |
+|---|---|---|---|---|
+| 9 | **stream-json 1→2** | Zero source imports — unused dependency. | `apps/customer-portal/package.json` | ✅ Resolved — removed from customer-portal dependencies |
+| 10 | **file-type** | Declared in customer-portal but no imports found there — unused. | `apps/customer-portal/package.json` | ✅ Resolved — removed from customer-portal and moved to `packages/shared` (where it is actually imported) |
+| 11 | **muhammara 5→6** | Native binary rebuild — test PDF metadata injection in dev. | N/A | ⬜ Manual QA pending (runtime-only, no code change needed) |
 
 ### Clean — No side effects found
 
@@ -362,13 +370,15 @@ Deep analysis of every major version bump for runtime side effects, missed migra
 
 ### Recommended priority order
 
-1. **Verify `wrapApiHandlerWithSentry` exists in v10** — if not, remove the import and wrapping (auto-instrumentation handles it)
-2. **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`**
-3. **Align react-dropzone** — bump creative-portal to `^15.0.0` to match shared
-4. **Remove `@types/react-datepicker`** from customer-portal
-5. **Fix `readFileSync` for MIME detection** — read only first 4KB
-6. **Clean up Sentry mock** and deprecated `nextConfig.js` options
-7. **Remove unused deps** (`stream-json`, `file-type` in customer-portal)
+1. ✅ **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`** — **Done**
+2. ✅ **Align react-dropzone** — bumped creative-portal to `^15.0.0` to match shared — **Done**
+3. ✅ **Remove `@types/react-datepicker`** from customer-portal — **Done**
+4. ✅ **Fix `readFileSync` for MIME detection** — now reads only first 4100 bytes — **Done**
+5. ✅ **Remove unused deps** (`stream-json`, `file-type` in customer-portal) — **Done** (file-type moved to `packages/shared` where it is actually used)
+6. ~~Verify `wrapApiHandlerWithSentry` exists in v10~~ **[STALE — Sentry reverted to v7]**
+7. ~~Clean up Sentry mock and deprecated `nextConfig.js` options~~ **[STALE — Sentry reverted to v7]**
+
+All non-stale Side-Effects items (1, 3, 6, 7, 8, 9, 10) are resolved. Item 11 (`muhammara 5→6` native-binary QA) is a runtime test that needs manual verification before merge.
 
 ---
 
@@ -376,13 +386,21 @@ Deep analysis of every major version bump for runtime side effects, missed migra
 
 **Approve with suggestions**
 
-1. **Verify `wrapApiHandlerWithSentry` in Sentry v10** — if removed, all API routes break. Remove the import and wrapping if auto-instrumentation handles it.
-2. **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`** — currently relies on Yarn hoisting from creative-portal.
-3. **Align react-dropzone versions** — creative-portal `^14.2.2` vs shared `^15.0.0`. Bump creative-portal to `^15.0.0`.
-4. **Fix `readFileSync` for MIME detection** — read only the first 4KB instead of the entire file to avoid OOM on large uploads.
-5. **Remove `@types/react-datepicker`** from customer-portal — react-datepicker v9 ships its own types.
-6. **Clean up Sentry config** — remove deprecated `transpileClientSDK` and `autoInstrumentServerFunctions` options, update stale mock.
-7. **Remove unused deps** — `stream-json` and `file-type` in customer-portal have zero source imports.
-8. **Manual QA the test plan items** before merging — especially swiper carousel, toast notifications, iron-session login/logout flows, and Sentry error capture.
-9. **Document scope expansion on the Jira ticket** — the PR goes well beyond the ticket's stated scope (justified, but should be documented for traceability).
-10. **Note Storybook deferral** — explicitly mark Jira requirement #2 as deferred to a separate ticket.
+1. ✅ **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`** — **Done** (previously relied on Yarn hoisting from creative-portal).
+2. ✅ **Align react-dropzone versions** — creative-portal bumped from `^14.2.2` to `^15.0.0` to match shared. **Done**
+3. ✅ **Fix `readFileSync` for MIME detection** — now reads only the first 4100 bytes instead of the entire file. **Done**
+4. ✅ **Remove `@types/react-datepicker`** from customer-portal — react-datepicker v9 ships its own types. **Done**
+5. ✅ **Remove unused deps** — `stream-json` removed; `file-type` relocated from customer-portal to `packages/shared` (where it is actually imported). **Done**
+6. ✅ **Remove fragile `AxiosRequestHeaders` cast in `services/customers/index.tsx`** — headers now explicitly stringified. **Done**
+7. ✅ **Replace recharts tick `as` casts** with `YAxisTickContentProps` in `UsageChart`. **Done**
+8. ✅ **Use `"Untitled"` fallback** for nullable Google Picker `file.name`. **Done**
+9. ⬜ **Manual QA the test plan items** before merging — especially swiper carousel, toast notifications, iron-session login/logout flows, and `muhammara` PDF metadata injection.
+10. ⬜ **Document scope expansion on the Jira ticket** — the PR goes well beyond the ticket's stated scope (justified, but should be documented for traceability).
+11. ⬜ **Note Storybook deferral** — explicitly mark Jira requirement #2 as deferred to a separate ticket.
+
+> ~~Verify `wrapApiHandlerWithSentry` in Sentry v10~~ and ~~Clean up Sentry config (deprecated options + stale mock)~~ — **[STALE]** Sentry 7→10 upgrade was reverted (commits `05c364a1a`, `7e5cd7c63`); these items no longer apply.
+
+### Verification (on current working tree)
+- `npx turbo run typecheck` → 5/5 workspaces pass (0 errors)
+- ESLint on each file touched by this review — clean (pre-existing lint errors in `packages/wysiwyg` and `packages/shared` are unchanged by these edits)
+- `npx turbo run test` → all suites green (950 shared, 706 creative-portal, plus customer-portal and wysiwyg)
