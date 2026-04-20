@@ -8,6 +8,43 @@
 
 ---
 
+## Resolution Status (updated 2026-04-20)
+
+All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tracking`. The two invalid points are skipped with rationale below.
+
+| # | Issue | Status | Landing commit |
+|---|---|---|---|
+| 1 | Caller-supplied `extra` overwritten by axios details | ✅ Resolved | `af8f89c78` |
+| 2 | Duplicated QueryClient + interceptor bootstrap | ✅ Resolved — extracted to `createAppQueryClient` | `af8f89c78` |
+| 3 | Narrow error boundary scope | ✅ Resolved — boundary is outermost, inside `<ThemeProvider>` | `af8f89c78` |
+| 4 | Axios `AxiosHeaders` prototype stripped by spread | ❌ **Invalid** — repo pins `axios ^0.27.2`; `config.headers` is a plain object in that version, not an `AxiosHeaders` instance, so spreading is safe |  — |
+| 5 | High-cardinality `route` tag | ✅ Resolved — new `getSentryRoute()` helper prefers Next router template (`/orders/[id]`) | `af8f89c78` |
+| 6 | Error ID shown in boundary but not in `ErrorPage` | ✅ Resolved — `errorId` threaded through `getInitialProps` and rendered | `af8f89c78` |
+| 7 | Unsafe `as Error & { statusCode?: number }` cast | ✅ Resolved — narrowed to `{ statusCode?: number } \| null` | `af8f89c78` |
+| 8 | Sentry mock missing v10 API surface | ✅ Resolved — added `withIsolationScope`, `withScope`, `replayIntegration`, `browserTracingIntegration`, `setUser`, `flush`, `getScopeData` | `af8f89c78` |
+| 9 | No test for `withIsolationScope` migration | ✅ Resolved — new `withSentryUser.test.ts` (5 tests) | `af8f89c78` |
+| 10 | Module-scope `installAxiosCorrelationInterceptor()` | ✅ Resolved — moved into `useEffect` in both `_app.tsx` | `af8f89c78` |
+| 11 | Stale `/* eslint-disable no-console */` | ✅ Resolved — removed from `sentryContext.ts:1` | `af8f89c78` |
+| 12 | `^10.48.0` caret range vs "pinning convention" | ❌ **Invalid** — repo uses caret ranges pervasively (`^12.12.0`, `^11.11.4`, `^3.10.7`…); exact pins are reserved for root `resolutions` (React, Tiptap). `^10.48.0` matches project style | — |
+| 13 | No test for `reportError` with primitive inputs | ✅ Resolved — 4 new primitive tests + caller-wins test | `af8f89c78` |
+| 14 | No test for `_app.tsx` QueryCache/MutationCache wiring | ✅ Resolved — factory extraction + `createAppQueryClient.test.ts` (5 tests) | `af8f89c78` |
+
+### Post-review hardening
+
+| Change | Commit |
+|---|---|
+| Wrap non-Error `reportError` inputs in synthetic `Error("Non-Error thrown: …")` so Sentry shows searchable titles instead of `<unknown>`; raw value preserved at `extra.originalValue` | `c6ee03005` |
+| Dev-only `/sentry-test` page (404 in production) that exercises every error path — boundary crash, primitive captures, axios 4xx/5xx, caller-extra precedence | `c3cc2397b` |
+| Real `useQuery` + `useMutation` probes on `/sentry-test` to exercise QueryCache/MutationCache `onError` wiring | `069833755` |
+
+### Verification
+
+- `npx turbo run test --filter=@proofed/shared` → **1008/1008 passing**
+- `npx turbo run typecheck --filter=@proofed/shared` → no new errors (pre-existing errors in `Loader`, `Typography`, `iron-session` are orthogonal to this PR and exist on `HEAD~4`)
+- `npx turbo run lint --filter=@proofed/shared --filter=@proofed/creative-portal --filter=@proofed/customer-portal` → clean for PP-1750 files (pre-existing errors in other files are unrelated)
+
+---
+
 ## Jira Requirements vs Implementation
 
 | Jira Requirement | PR Implementation | Status |
@@ -279,30 +316,27 @@ export const getCurrentScope = () => ({
 
 | Aspect | Status |
 |---|---|
-| Correctness | ⚠️ Axios header spread (#4); route cardinality (#5); extras overwrite (#1) |
-| Regression risk | ⚠️ Medium — SDK v7→v10 major bump with limited test coverage of the v10-specific API paths; `withIsolationScope` semantic change untested |
-| Tests | ⚠️ 32 new tests land, but gaps on the highest-risk v10 migration paths |
-| Code quality | ⚠️ Duplication across `_app.tsx` files (#2); narrow boundary scope (#3) |
-| Mergeable state | ❌ Dirty — needs rebase against `develop` |
+| Correctness | ✅ Extras overwrite (#1), route cardinality (#5), and error ID parity (#6) fixed. Axios spread (#4) confirmed non-issue for axios v0.27. |
+| Regression risk | ✅ Low — `withIsolationScope` covered by new integration-ish test (#9); v10 API mock surface expanded (#8); primitive `reportError` paths hardened + tested |
+| Tests | ✅ 1008 tests passing in shared workspace; 32 original + 18 new tests covering all review gaps |
+| Code quality | ✅ `_app.tsx` duplication eliminated via shared factory (#2); boundary scope widened (#3); stale directives removed (#11) |
+| Mergeable state | ❌ Dirty — needs rebase against `develop` before merge |
 
 ---
 
 ## Recommendation
 
-**Request changes** — the error-tracking infrastructure is well-designed and the Jira acceptance criteria are covered, but the Sentry v7→v10 SDK upgrade landed in the same PR with real risk areas and limited test coverage. Before merging:
+**Approve after rebase** — all 12 valid review points are addressed on the branch. The two rejected points (#4 axios spread, #12 caret pinning) are invalid against the actual repo state, with rationale preserved in the status table above.
 
-1. Fix the axios header spread (#4) — this is a real runtime hazard for downstream interceptors.
-2. Widen `AppErrorBoundary` scope or confirm intent to keep it narrow (#3).
-3. Extract the duplicated `_app.tsx` QueryClient factory + interceptor install into `@proofed/shared` (#2).
-4. Standardize `route` extraction via a shared helper (`router.pathname`, not `window.location.pathname`) across all three call sites (#5).
-5. Fix the `extra` overwrite precedence in `reportError` (#1), and document the policy.
-6. Expand the `@sentry/nextjs` mock to cover the v10 surface actually used (#8).
-7. Add a test for `withIsolationScope` async-context propagation (#9) before relying on it in production.
-8. Pin `@sentry/nextjs` to an exact version (#12).
-9. Remove the stale `eslint-disable no-console` in `sentryContext.ts` (#11).
-10. Rebase against `develop` to clear the dirty merge state.
+### Remaining before merge
 
-Optional but encouraged:
+1. **Rebase against `develop`** to clear the dirty merge state (only outstanding requirement).
+2. **Remove the `/sentry-test` page** if product doesn't want it deployed to stage. Currently guarded by `NODE_ENV === "production"` → 404 in prod, but stage/devtest will expose it. Safe to keep if the team values ongoing manual verification; otherwise delete before merge by reverting `c3cc2397b` and `069833755`.
 
-- Surface the Sentry event ID in `ErrorPage` for parity with `AppErrorBoundary` (#6).
-- Consider splitting the Sentry v7→v10 SDK upgrade into its own PR — the error-tracking utilities are independently valuable and a focused SDK-upgrade PR is easier to roll back.
+### Also landed as post-review hardening
+
+- `reportError` now wraps non-Error values (`null`, strings, plain objects) in a synthetic `Error` with a descriptive message and the raw value tucked under `extra.originalValue`, so Sentry stops collapsing every primitive into a single `<unknown>` group.
+
+Optional follow-ups (out of scope for this PR):
+
+- Consider splitting the Sentry v7→v10 SDK upgrade into its own PR in future if similar cross-cutting infra work arises; the current bundled approach is now well-tested.
