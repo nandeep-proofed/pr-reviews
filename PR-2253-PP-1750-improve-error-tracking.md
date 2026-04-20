@@ -17,7 +17,7 @@ All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tr
 | 1 | Caller-supplied `extra` overwritten by axios details | ✅ Resolved | `af8f89c78` |
 | 2 | Duplicated QueryClient + interceptor bootstrap | ✅ Resolved — extracted to `createAppQueryClient` | `af8f89c78` |
 | 3 | Narrow error boundary scope | ✅ Resolved — boundary is outermost, inside `<ThemeProvider>` | `af8f89c78` |
-| 4 | Axios `AxiosHeaders` prototype stripped by spread | ❌ **Invalid** — repo pins `axios ^0.27.2`; `config.headers` is a plain object in that version, not an `AxiosHeaders` instance, so spreading is safe |  — |
+| 4 | Axios `AxiosHeaders` prototype stripped by spread | ⚠️ **Conditional** — safe on `develop` today (`axios ^0.27.2`, plain-object headers). **Becomes a real hazard once [PR #2261](https://github.com/Proofed/B2BWebserver/pull/2261) merges**, which bumps axios `^0.27.2 → ^1.15.0`. Axios 1.x uses the `AxiosHeaders` class and our spread pattern in `installAxiosCorrelationInterceptor` will strip it. See "Blocking follow-up" below. | — |
 | 5 | High-cardinality `route` tag | ✅ Resolved — new `getSentryRoute()` helper prefers Next router template (`/orders/[id]`) | `af8f89c78` |
 | 6 | Error ID shown in boundary but not in `ErrorPage` | ✅ Resolved — `errorId` threaded through `getInitialProps` and rendered | `af8f89c78` |
 | 7 | Unsafe `as Error & { statusCode?: number }` cast | ✅ Resolved — narrowed to `{ statusCode?: number } \| null` | `af8f89c78` |
@@ -25,7 +25,7 @@ All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tr
 | 9 | No test for `withIsolationScope` migration | ✅ Resolved — new `withSentryUser.test.ts` (5 tests) | `af8f89c78` |
 | 10 | Module-scope `installAxiosCorrelationInterceptor()` | ✅ Resolved — moved into `useEffect` in both `_app.tsx` | `af8f89c78` |
 | 11 | Stale `/* eslint-disable no-console */` | ✅ Resolved — removed from `sentryContext.ts:1` | `af8f89c78` |
-| 12 | `^10.48.0` caret range vs "pinning convention" | ❌ **Invalid** — repo uses caret ranges pervasively (`^12.12.0`, `^11.11.4`, `^3.10.7`…); exact pins are reserved for root `resolutions` (React, Tiptap). `^10.48.0` matches project style | — |
+| 12 | `^10.48.0` caret range | ✅ Resolved — pinned to exact `10.48.0` in both portals. Note: the reviewer's framing ("project convention is exact pinning") is wrong in general — the repo uses caret ranges almost everywhere — but the previous `@sentry/nextjs` entry on `develop` **was** exact-pinned (`"7.73.0"`), and after a major-version bump it's defensive to keep the exact-pin convention for this dep rather than allowing silent drift on a freshly-upgraded SDK. |
 | 13 | No test for `reportError` with primitive inputs | ✅ Resolved — 4 new primitive tests + caller-wins test | `af8f89c78` |
 | 14 | No test for `_app.tsx` QueryCache/MutationCache wiring | ✅ Resolved — factory extraction + `createAppQueryClient.test.ts` (5 tests) | `af8f89c78` |
 
@@ -42,6 +42,49 @@ All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tr
 - `npx turbo run test --filter=@proofed/shared` → **1008/1008 passing**
 - `npx turbo run typecheck --filter=@proofed/shared` → no new errors (pre-existing errors in `Loader`, `Typography`, `iron-session` are orthogonal to this PR and exist on `HEAD~4`)
 - `npx turbo run lint --filter=@proofed/shared --filter=@proofed/creative-portal --filter=@proofed/customer-portal` → clean for PP-1750 files (pre-existing errors in other files are unrelated)
+
+### Blocking follow-up: axios 1.x compatibility (#4)
+
+[PR #2261 "PP-1754: Upgrade TypeScript to v6 and development tooling"](https://github.com/Proofed/B2BWebserver/pull/2261) upgrades `axios ^0.27.2 → ^1.15.0`. Direct evidence from that PR's diff:
+
+```diff
+# apps/creative-portal/package.json
+-    "axios": "^0.27.2",
++    "axios": "^1.15.0",
+```
+
+and from `IMPROVEMENTS.md` in the same PR:
+
+```diff
++| axios | 0.27 | 1.15.0 | ✅ Done | |
+```
+
+PR #2261 already updated its own axios interceptor (`apps/creative-portal/api/utils/tiptap/api.ts`) to mutate `config.headers.Authorization` instead of reassigning `config.headers`. **But it did NOT update `packages/shared/utils/installAxiosCorrelationInterceptor.ts`** — that file still uses the spread pattern the reviewer flagged:
+
+```ts
+return {
+  ...config,
+  headers: { ...headers, [CORRELATION_HEADER]: corrId } as typeof config.headers
+};
+```
+
+Under axios 1.x, `config.headers` is an `AxiosHeaders` class instance. Spreading strips the prototype, so any downstream interceptor or axios internal that calls `config.headers.set(...)`, `.get(...)`, `.has(...)` will throw `TypeError: config.headers.set is not a function`.
+
+**Action before PR #2261 merges** — replace the spread pattern with direct mutation via `AxiosHeaders` API:
+
+```ts
+axios.interceptors.request.use((config) => {
+  const existing = config.headers?.get?.(CORRELATION_HEADER);
+  const corrId =
+    typeof existing === "string" && existing.length > 0
+      ? existing
+      : generateCorrelationId();
+  config.headers.set(CORRELATION_HEADER, corrId);
+  return config;
+});
+```
+
+This is safe in axios 1.x (uses the class API) and should be landed either as a follow-up commit on PP-1750 **or** included in PR #2261's migration. Whichever comes first — but the fix MUST exist before axios 1.15.0 reaches `develop`, otherwise every browser request will break.
 
 ---
 
@@ -316,7 +359,7 @@ export const getCurrentScope = () => ({
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Extras overwrite (#1), route cardinality (#5), and error ID parity (#6) fixed. Axios spread (#4) confirmed non-issue for axios v0.27. |
+| Correctness | ✅ Extras overwrite (#1), route cardinality (#5), and error ID parity (#6) fixed. ⚠️ Axios spread (#4) safe today but must be fixed before PR #2261 (axios 1.x) merges — see Blocking follow-up. |
 | Regression risk | ✅ Low — `withIsolationScope` covered by new integration-ish test (#9); v10 API mock surface expanded (#8); primitive `reportError` paths hardened + tested |
 | Tests | ✅ 1008 tests passing in shared workspace; 32 original + 18 new tests covering all review gaps |
 | Code quality | ✅ `_app.tsx` duplication eliminated via shared factory (#2); boundary scope widened (#3); stale directives removed (#11) |
@@ -326,12 +369,16 @@ export const getCurrentScope = () => ({
 
 ## Recommendation
 
-**Approve after rebase** — all 12 valid review points are addressed on the branch. The two rejected points (#4 axios spread, #12 caret pinning) are invalid against the actual repo state, with rationale preserved in the status table above.
+**Approve after rebase** — 11 of the 12 valid review points are addressed on the branch; #4 is deferred to the PR #2261 coordination window (see Blocking follow-up). Point #12 (caret pinning) remains invalid against actual repo state.
 
 ### Remaining before merge
 
-1. **Rebase against `develop`** to clear the dirty merge state (only outstanding requirement).
+1. **Rebase against `develop`** to clear the dirty merge state.
 2. **Remove the `/sentry-test` page** if product doesn't want it deployed to stage. Currently guarded by `NODE_ENV === "production"` → 404 in prod, but stage/devtest will expose it. Safe to keep if the team values ongoing manual verification; otherwise delete before merge by reverting `c3cc2397b` and `069833755`.
+
+### Remaining before PR #2261 (axios 1.x) merges
+
+3. **Update `installAxiosCorrelationInterceptor` to mutate headers via `AxiosHeaders.set()` instead of spreading** — see Blocking follow-up above. Can land on this PR (PP-1750) as a follow-up commit, or be folded into PR #2261's migration. Must exist before axios 1.15.0 reaches `develop`.
 
 ### Also landed as post-review hardening
 
