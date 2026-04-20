@@ -3,12 +3,12 @@
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2253
 **Jira:** https://proofed.atlassian.net/browse/PP-1750
 **Status:** In Progress
-**Mergeable state:** `dirty` (needs rebase against `develop`)
+**Mergeable state:** ✅ Up-to-date with `develop` (merge commit `d22331582`, 0 behind)
 **CI status:** pending
 
 ---
 
-## Resolution Status (updated 2026-04-20)
+## Resolution Status (updated 2026-04-20, post-develop-merge)
 
 All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tracking`. The two invalid points are skipped with rationale below.
 
@@ -34,8 +34,9 @@ All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tr
 | Change | Commit |
 |---|---|
 | Wrap non-Error `reportError` inputs in synthetic `Error("Non-Error thrown: …")` so Sentry shows searchable titles instead of `<unknown>`; raw value preserved at `extra.originalValue` | `c6ee03005` |
-| Dev-only `/sentry-test` page (404 in production) that exercises every error path — boundary crash, primitive captures, axios 4xx/5xx, caller-extra precedence | `c3cc2397b` |
-| Real `useQuery` + `useMutation` probes on `/sentry-test` to exercise QueryCache/MutationCache `onError` wiring | `069833755` |
+| Pin `@sentry/nextjs` to exact `10.48.0` to prevent silent drift on a freshly-upgraded SDK (closes review #12) | `8dbf0b9de` |
+
+> The `/sentry-test` manual verification page (commits `c3cc2397b` and `069833755`) was reverted before merge — the full `1008/1008` automated suite already covers every error-tracking path, and keeping a dev-only page reachable on stage/devtest created noise without lasting value.
 
 ### Verification
 
@@ -363,7 +364,7 @@ export const getCurrentScope = () => ({
 | Regression risk | ✅ Low — `withIsolationScope` covered by new integration-ish test (#9); v10 API mock surface expanded (#8); primitive `reportError` paths hardened + tested |
 | Tests | ✅ 1008 tests passing in shared workspace; 32 original + 18 new tests covering all review gaps |
 | Code quality | ✅ `_app.tsx` duplication eliminated via shared factory (#2); boundary scope widened (#3); stale directives removed (#11) |
-| Mergeable state | ❌ Dirty — needs rebase against `develop` before merge |
+| Mergeable state | ✅ Up-to-date with `develop` via merge commit `d22331582` |
 
 ---
 
@@ -373,8 +374,10 @@ export const getCurrentScope = () => ({
 
 ### Remaining before merge
 
-1. **Rebase against `develop`** to clear the dirty merge state.
-2. **Remove the `/sentry-test` page** if product doesn't want it deployed to stage. Currently guarded by `NODE_ENV === "production"` → 404 in prod, but stage/devtest will expose it. Safe to keep if the team values ongoing manual verification; otherwise delete before merge by reverting `c3cc2397b` and `069833755`.
+1. ~~Rebase against `develop`~~ ✅ Done — `develop` merged in via commit `d22331582` (merge commit rather than rebase, but both resolve the dirty state).
+2. ~~Remove the `/sentry-test` page~~ ✅ Done — reverted so the PR ships only the permanent error-tracking infra.
+
+No outstanding blockers before merge.
 
 ### Remaining before PR #2261 (axios 1.x) merges
 
