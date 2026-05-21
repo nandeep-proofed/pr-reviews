@@ -10,80 +10,207 @@
 
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
-| Add Usage report entry to Admin Portal reporting section | New "Customer" tab added to `ReportingPage` at `/reporting#customer` | ✅ Addressed |
-| Accessible to all authenticated admin users | `getServerSideProps` expanded to Admin, Superadmin, Returner, ServiceDelivery, ServiceSupport | ⚠️ Partial — see Issue #1 |
-| Organization filter — single-select, populated from Org Search API | `OrganizationFilter` component using `useAllOrganizationsQuery({ status: "A" })` | ✅ Addressed |
-| Must select org before report loads | Query disabled when `selectedOrgId` is null; prompt shown | ✅ Addressed |
-| Project filter — multi-select org groups, default All | `ProjectFilter` (shared) with fallback to all org group IDs | ✅ Addressed |
-| Changing org resets project filter to All | `handleOrgChange` calls `setSelectedOrgGroupIds([])` | ✅ Addressed |
-| Data from OMS Charge API (complete orders only) | API handler filters `order.status === "Complete"` | ✅ Addressed |
-| Report only requests data when org selected or filters change | React Query `enabled` gated on `selectedOrgId && activeOrgGroupIds.length > 0` | ✅ Addressed |
-| Charge requests batched per org group | Creative portal fans out per orderId (not per group) due to API limitation; documented in code comment | ⚠️ Different approach — see Issue #2 |
-| Single Complete section of summarized charge usage | `SummaryCards` with `showInProgress={false}` + `UsageChart` | ✅ Addressed |
-| Sum charges same as Customer Portal | Uses shared `calculateChargeTotalFromCharges` | ✅ Addressed |
+| Add "Usage" entry to Admin Portal reporting section | New `Customer` tab in `apps/creative-portal/components/pages/reporting/index.tsx`, rendering `ClientUsage` partial | ✅ Addressed |
+| Accessible to all authenticated admin users | Page `getServerSideProps` restricts to Admin / ServiceDelivery / Superadmin. **API endpoint does NOT enforce roles** | ⚠️ Partial — see Issue #1 |
+| Single-select Organization filter; must be selected before data loads | `OrganizationFilter` + `useAllOrganizationsQuery({ status: "A" })` (Org Search API); data query disabled until `selectedOrgId` is set | ✅ Addressed |
+| Multi-select Project filter populated from org groups | Shared `ProjectFilter` + `useOrgGroups({ orgId })` (Org Group Search API) | ✅ Addressed |
+| Project default = All; changing org resets to All | `handleOrgChange` resets `selectedOrgGroupIds` to `[]`, treated as "All" by `activeOrgGroupIds` | ✅ Addressed |
+| Charge requests batched per org group (Complete only) | `fetchOrders` per group, `status === "Complete"` filter, charges fetched via `mapWithConcurrency` (limit 10) | ✅ Addressed (different shape — see Issue #3) |
+| Single Complete section grouped by project | `SummaryCards` with `showInProgress={false}` — cards are Complete-only | ⚠️ Partial — chart legend/tooltip still reference In Progress (Issue #2) |
+| Summation aligns with PP-1633 | Reuses `calculateChargeTotalFromCharges` + `fetchChargesForOrder(isBeforeChargeData)` — same pipeline as `useOrderChargeTotalQuery` | ✅ Addressed |
 | No org selected → prompt | `OrganizationPrompt` rendered when `!selectedOrgId` | ✅ Addressed |
-| No data → "No Usage In This Period" | `SummaryCards` shows empty state when `completeOrderCount === 0` | ✅ Addressed |
-| **Date Range filter** | Deferred per Jira (not in admin portal) — DateRangeFilter extracted to shared but not wired in admin | ✅ Correct |
-| **Customer filter** | Deferred per Jira | ✅ Correct |
-| **In Progress section** | Deferred per Jira — `inProgressOrders` always `[]` in admin API | ✅ Correct |
+| No data → "No Usage In This Period" | `SummaryCards` empty state when `completeOrderCount === 0` | ✅ Addressed |
+| Customer filter (deferred) | Not implemented (PR description incorrectly mentions a `CustomerFilter` — see Issue #10) | ✅ Correctly omitted |
+| Date Range filter (deferred) | Not used in Admin tab; component remains shared and consumed only by customer-portal usage report | ✅ Correctly omitted from Admin |
+| In Progress section (deferred) | Cards suppressed via `showInProgress={false}`; chart legend/tooltip still reference In Progress | ⚠️ Partial — Issue #2 |
 
-**Beyond scope:** Shared component extraction (SummaryCards, UsageChart, DateRangeFilter, ProjectFilter), customer portal refactor to use shared, `mapWithConcurrency` utility, `calculateOrderTotal` move to shared, `computeDateRange`/`computeOrderMetrics` extraction, theme additions. These are reasonable enabling work for code reuse.
+**Scope deltas vs Jira:**
+- Server-side `MIN_REPORT_DATE_ISO = "2026-02-01"` floor drops orders whose earliest charge is before Feb 1, 2026. Mirrors the customer-portal's `StartDate` semantics and is appropriate as a data-quality floor even though the Date Range filter is deferred.
+- Extracts `SummaryCards` / `UsageChart` / `ProjectFilter` / `DateRangeFilter` / `mapWithConcurrency` / `computeOrderMetrics` / `computeDateRange` / `formatUsageCost` / `calculateOrderTotal` into `@proofed/shared` and migrates customer-portal to consume them — legitimate enabling refactor; regression risk covered below.
 
 ---
 
 ## Architecture Analysis
 
-The PR takes a well-structured approach:
+Clean shared/portals split — reusable UI primitives and utilities moved into `@proofed/shared`, customer-portal updated to consume them, admin-portal builds on the same shared building blocks. Component structure follows project conventions (`index.tsx` + `hooks.ts` + `styles.ts` + `types.ts` per folder).
 
-1. **Shared extraction:** Reusable UI components and utilities are moved from customer portal to `@proofed/shared`, with a new `ProjectGroup` interface abstracting away portal-specific org group shapes.
-2. **Admin API:** A new `/api/mixtures/usageReportData` endpoint in the creative portal fetches orders per org group, then fans out charge fetches per orderId (bounded by `mapWithConcurrency` at concurrency 10). This differs from the customer portal's per-group batching because the Charge API's `SearchBy=organizationGroupId` response omits `orderId`.
-3. **Component structure:** Follows project conventions — `index.tsx` + `hooks.ts` + `styles.ts` + `types.ts` per component folder.
-4. **Customer portal regression:** Existing components are updated to import from shared; types moved to shared types. Tests updated accordingly.
+Key intentional divergence from PP-1633: the Charge service's `SearchBy=organizationGroupId` response omits `orderId`, so the per-group batched-charges shortcut from PP-1633 isn't reusable in the admin handler. Instead, the handler fans out per-order charge fetches bounded by `mapWithConcurrency` (limit 10), with the trade-off documented at the top of `getUsageReportData.ts` and a noted follow-up to revisit once the Charge API returns `orderId`.
 
-The `mapWithConcurrency` utility is a clean, well-tested concurrency limiter that avoids pulling in a dependency like `p-limit`.
+`mapWithConcurrency` is a clean, well-tested concurrency limiter that avoids pulling in a dependency like `p-limit`.
 
 ---
 
 ## Issues Found
 
-### 1. Role expansion may be too permissive
+### 1. New API endpoint has no role-based authorization or data-scope check
 
-**[File: apps/creative-portal/components/pages/reporting/index.tsx]**
-**Function/Class:** `getServerSideProps`
-**Severity:** medium
-**Problem:** The `getServerSideProps` now includes `UserRole.Returner` and `UserRole.ServiceSupport` in addition to Admin, Superadmin, and ServiceDelivery. The Jira ticket says "accessible to all authenticated admin users" but doesn't explicitly define which roles qualify. Returner and ServiceSupport may not be considered "admin users."
-**Impact:** Users with Returner or ServiceSupport roles could access client financial data (charge totals) they shouldn't see.
-**Fix:** Confirm with the product team whether Returner and ServiceSupport should have access to the Client Usage Report. If not, revert to the original role set (Admin, Superadmin, ServiceDelivery).
+**[File: apps/creative-portal/api/mixtures/usageReportData/getUsageReportData.ts]**
+**Function/Class:** `getUsageReportData` / `withApiMiddleware(handler, options)`
+**Severity:** high
+**Problem:** `options` only sets `schema`; it doesn't pass `requiredRoles`. `withApiMiddleware` defaults `requiredRoles: []`, so any authenticated creative-portal user (specialists, editors, etc.) can call `GET /api/mixtures/usageReportData?organizationGroupIds=…` and receive charge totals for **any** org group by id. The handler also doesn't cross-check that the caller has access to the requested org groups.
+**Impact:** Privilege escalation in the creative portal — non-admin authenticated users can enumerate financial data for arbitrary client organizations. The page is correctly gated via `getServerSideProps`, but the API surface bypasses that.
+**Fix:** Restrict the endpoint to admin-tier roles, mirroring the page:
 
-### 2. Order fan-out could be expensive for large organizations
+```typescript
+const options = {
+  requiredRoles: [
+    UserRole.Admin,
+    UserRole.ServiceDelivery,
+    UserRole.Superadmin
+  ],
+  schema: getUsageReportDataSchema
+} as const;
+```
+
+If a broader audience is intended, also verify the requester has access to each `organizationGroupId` before fetching charges.
+
+### 2. UsageChart legend and tooltip always reference "In Progress" — leaks deferred-scope UI into the Admin tab
+
+**[File: packages/shared/components/molecules/UsageReport/UsageChart/index.tsx, .../partials/CustomTooltip/index.tsx]**
+**Function/Class:** `UsageChart`, `CustomTooltip`
+**Severity:** high
+**Problem:** Jira reduces admin scope to a single Complete section — In Progress is deferred. `SummaryCards` correctly accepts `showInProgress` and admin passes `false`. But `UsageChart` hard-codes both legend entries (`Complete`, `In Progress`), renders an `inProgressOrders` `<Bar>`, and `CustomTooltip` renders an "In Progress" row, a "% Complete" row, and the `IN_PROGRESS_CHART_FOOTER_TEXT` footer ("Hourly charges will not be correctly calculated for 'In Progress' orders.") on every tooltip — even when `inProgressOrders` is always 0.
+**Impact:** Admin users see an "In Progress: $0.00" line on every tooltip and an irrelevant footer warning about hourly charges. The chart legend is misleading. Directly conflicts with "The report must display a single Complete section".
+**Fix:** Thread a `showInProgress?: boolean` prop (default `true`) through `UsageChart` → `CustomTooltip`. From `ClientUsage` pass `false`. Conditionally render the In Progress legend item, the `inProgressOrders` `<Bar>`, the In Progress tooltip row, the "% Complete" row, and the footer text. Customer-portal call sites keep the default and behave unchanged.
+
+### 3. Order fan-out is unbounded and pre-dates the MIN_REPORT_DATE filter
 
 **[File: apps/creative-portal/api/mixtures/usageReportData/getUsageReportData.ts]**
 **Function/Class:** `getUsageReportData`
 **Severity:** medium
-**Problem:** The creative portal fetches charges per orderId (not per org group like the customer portal) because the Charge API's `SearchBy=organizationGroupId` omits `orderId`. For organizations with hundreds of completed orders, this means hundreds of individual HTTP requests to the charge service, even with the concurrency cap at 10. There's no pagination or limit on the number of orders processed.
-**Impact:** Slow response times and high load on the charge service for large organizations. The endpoint could time out for organizations with thousands of completed orders.
-**Fix:** Consider:
-1. Adding a comment documenting the expected order-count scale
-2. Adding a cap/warning log when order count exceeds a threshold (e.g., 500)
-3. The code comment already mentions a follow-up to extend the Charge API — ensure a ticket is created for this
+**Problem:** Two compounding cost issues:
+1. `fetchOrders({ ..., includeClosed: true })` retrieves ALL completed orders for each selected org group, regardless of age. The `MIN_REPORT_DATE_ISO` floor is applied *after* fetching orders AND charges. For an org with 5 years of history, every order is fetched and every charge is fetched before most are discarded.
+2. Charge fetches are issued per-order (because `SearchBy=organizationGroupId` omits `orderId`), bounded by concurrency 10 but with no overall cap. A partner with thousands of complete orders will issue thousands of HTTP requests to the charge service per report load.
+**Impact:** High latency and disproportionate load on the orders/charge services for large or long-lived organizations. Risk of request timeouts at scale.
+**Fix:**
+- If `fetchOrders` accepts a date filter, push a lower-bound (e.g. `MIN_REPORT_DATE_ISO` minus a buffer) into the call so the orders list is pre-trimmed.
+- Add an info-level log of the order count and a warning above a threshold (e.g. 500) so this is observable in production.
+- The existing code comment notes the follow-up to extend the Charge API to return `orderId` — confirm a ticket exists.
 
-### 3. Unbounded order fetching — all orders for org group including very old ones
+### 4. Admin and customer hooks differ on `isLoading` vs `isFetching`
 
-**[File: apps/creative-portal/api/mixtures/usageReportData/getUsageReportData.ts]**
-**Function/Class:** `getUsageReportData`
+**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/hooks.ts]**
+**Function/Class:** `useClientUsageReport`
 **Severity:** medium
-**Problem:** `fetchOrders` with `includeClosed: true` retrieves ALL completed orders for each org group, regardless of age. The `MIN_REPORT_DATE_ISO` floor is only applied after fetching and processing charges. If an org has 5 years of history, all orders are fetched, all charges are fetched, and then most are discarded.
-**Impact:** Wasted API calls and processing time. An organization with a long history will make far more charge requests than necessary.
-**Fix:** If the `fetchOrders` API supports a date filter, use it to limit orders to those created after a reasonable lookback (e.g., 2 years before `MIN_REPORT_DATE_ISO`). If not, document this limitation as a follow-up.
+**Problem:** `isLoading = isFetchingOrgGroups || isFetchingReportData`. The customer-portal sibling (`apps/customer-portal/components/pages/reports/usage/hooks.ts`) uses `isLoading` from each query. `isFetching` is `true` on every background refetch (tab refocus, window focus, refetch-on-mount); `isLoading` is only `true` until the first response.
+**Impact:** UX regression vs the customer-portal pattern — existing data is hidden behind the loader on every background refresh, causing flicker even when cached data is available.
+**Fix:** Use `isLoading` from each query, matching customer-portal:
 
-### 4. Date string comparison for `MIN_REPORT_DATE_ISO` is fragile
+```typescript
+const { data: rawOrgGroups = [], isLoading: isLoadingOrgGroups, isError: hasOrgGroupsError } = useOrgGroups({ ... });
+const { data: usageReportData, isLoading: isLoadingReportData, isError: hasError } = useUsageReportDataQuery(...);
+const isLoading = isLoadingOrgGroups || isLoadingReportData;
+```
 
-**[File: apps/creative-portal/api/mixtures/usageReportData/getUsageReportData.ts]**
-**Function/Class:** `getUsageReportData` (line ~120 in diff)
+### 5. Customer-portal `MonthlyUsageData.year` introduces a visible tooltip change
+
+**[File: packages/shared/types/usageReport/types.ts, apps/customer-portal/components/pages/reports/usage/hooks.ts, .../UsageChart/partials/CustomTooltip/index.tsx]**
+**Function/Class:** `MonthlyUsageData`, customer-portal `useUsageReport`, `CustomTooltip`
+**Severity:** medium
+**Problem:** `MonthlyUsageData` now has a required `year: number` field that didn't exist in the previous customer-portal local type. Customer-portal's hook was rewritten to (a) map `rawOrgGroups` to the new `ProjectGroup` shape (`groupId`/`groupName`) and (b) include `year` on each `monthly` entry. The shared `CustomTooltip` now renders `"{month.slice(0,3)} {String(year).slice(-2)}"` (e.g. "Mar 26"). The customer-portal `index.test.tsx` was updated for the new shape.
+**Impact:** Visible UX change in the customer-portal usage report tooltip — previously month-only labels, now month + 2-digit year. May or may not be intended.
+**Fix:** Visually QA the customer-portal tooltip and confirm "Mar 26"-style display matches the design (screenshot in PR), or revert the tooltip to month-only for parity. Also add a hooks-level test in `apps/customer-portal/components/pages/reports/usage/hooks.test.ts` that the `year` field is correctly derived from order dates spanning multiple years — current tests pre-supply `year` in fixtures, so the parsing path is untested.
+
+### 6. `ClientUsage/index.tsx` has no UI test
+
+**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/index.tsx]**
+**Function/Class:** `ClientUsage`
+**Severity:** medium
+**Problem:** Hooks, `OrganizationFilter`, handler, and shared utilities all have tests. The composing component (which orchestrates the "Please select an organization" prompt, the error banner, the loader, and the chart/cards visibility) is not directly tested. CLAUDE.md: "Every PR must include tests for new code".
+**Impact:** Conditional rendering branches in `ClientUsage` can silently regress without test failures.
+**Fix:** Add `ClientUsage/index.test.tsx` covering: (a) no-org prompt when `selectedOrgId === null`; (b) error banner when query errors; (c) loader when `isLoading`; (d) chart hidden when `monthlyData.length === 0` while cards still render.
+
+### 7. `OrganizationFilter/hooks.ts` has no dedicated test
+
+**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/partials/OrganizationFilter/hooks.ts]**
+**Function/Class:** `useOrganizationFilter`
+**Severity:** medium
+**Problem:** The hook contains non-trivial logic — option mapping from organizations, selected-value memoization, and the change handler with type narrowing between `SingleValue` and `MultiValue`. The component test (`index.test.tsx`) exercises it through the integration but doesn't isolate the hook.
+**Impact:** Hook-level logic changes (e.g. change-handler edge cases like clearing while selection is already null) could regress undetected.
+**Fix:** Add `hooks.test.ts` directly testing option building, selected-value derivation, and the change handler callback (including the `null` and `MultiValue` defensive branches).
+
+### 8. `mapWithConcurrency` rejects on first failure but lets sibling workers run unobserved
+
+**[File: packages/shared/utils/mapWithConcurrency.ts]**
+**Function/Class:** `mapWithConcurrency`
 **Severity:** low
-**Problem:** The code compares `earliestChargeTimestamp.split("T")[0] < MIN_REPORT_DATE_ISO` using string comparison. This works for ISO dates (lexicographic order matches chronological order), but is fragile — if the timestamp format ever changes, this silently breaks.
-**Impact:** Low — ISO format is stable, but the pattern is non-obvious to future maintainers.
-**Fix:** Consider using a Date comparison for clarity:
+**Problem:** When one worker's `fn` rejects, `Promise.all(workers)` rejects, but the remaining workers' `while (nextIndex < items.length)` loops continue until items are exhausted. Their results land in `results` but the caller has already moved on.
+**Impact:** Not exercised in this PR (the per-order async fn catches its own errors and returns `null`, so `mapWithConcurrency` never sees a rejection). But the utility is now in `@proofed/shared` and the next consumer may not pre-catch — risk of amplifying load on a failing downstream.
+**Fix:** Set a `hasRejected` flag and short-circuit the worker loop, or accept an `AbortSignal`. At minimum, document the semantics in a one-line comment so future callers know what to expect.
+
+### 9. `useOrgGroups` is called with `orgId: 0` when no org is selected
+
+**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/hooks.ts]**
+**Function/Class:** `useClientUsageReport`
+**Severity:** low
+**Problem:** `useOrgGroups({ orgId: selectedOrgId ?? 0, options: { enabled: !!selectedOrgId } })`. The query is correctly disabled, but the React Query cache key still includes `orgId.toString() === "0"`. Sentinel-`0` is treated as if it were a valid org id by the producer.
+**Impact:** No current bug, but obscures intent and could cause cache confusion if `useOrgGroups`'s contract changes.
+**Fix:** Guard the call (e.g. only render dependents when selected) or change `useOrgGroups` to accept `number | null` and short-circuit internally.
+
+### 10. PR description claims a `CustomerFilter` was added; the code has none
+
+**[File: PR description]**
+**Severity:** low
+**Problem:** The PR description's "Areas of Change" lists `apps/creative-portal/components/pages/reporting/partials/ClientUsage/` "new UI (OrganizationFilter, **CustomerFilter**, hooks, styles)". The repo has only `OrganizationFilter/` — there is no `CustomerFilter/`. Customer filter is deferred per Jira.
+**Impact:** Misleads reviewers and future archaeologists. No behavioral effect.
+**Fix:** Update the description: drop the `CustomerFilter` reference and explicitly call out that Customer filter, Date Range filter (in the admin tab), and In Progress section are deferred per the 2026-04-17 scope reduction.
+
+### 11. JSX prop forwarding doesn't follow the spread-with-object-literal convention
+
+**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/index.tsx]**
+**Function/Class:** `ClientUsage`
+**Severity:** low
+**Problem:** Per CLAUDE.md: "When a parent forwards several local variables as props, prefer the spread-with-object-literal pattern over a sequence of explicit `prop={local}` assignments". Both child renders are exactly this case.
+**Impact:** Style only.
+**Fix:**
+
+```tsx
+<OrganizationFilter
+  {...{ isLoading, onOrgChange: handleOrgChange, selectedOrgId }}
+/>
+<ProjectFilter
+  {...{ orgGroups, selectedOrgGroupIds, onSelectionChange: setSelectedOrgGroupIds }}
+/>
+```
+
+### 12. `OrganizationPrompt` doubles as the loading skeleton container
+
+**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/index.tsx, styles.ts]**
+**Function/Class:** `ClientUsage`
+**Severity:** low
+**Problem:** `LoadingWrapper`'s `skeleton` wraps `<Loader />` inside `<OrganizationPrompt>` (which is the styled-component for the "select an organization" text frame). Works visually because both are full-height centered flexes, but the name no longer matches its role.
+**Impact:** Maintainability — restyling `OrganizationPrompt` will silently affect the loader.
+**Fix:** Extract a `CenteredLoader` (mirroring `apps/customer-portal/components/pages/reports/styles.ts`) for the loader; keep `OrganizationPrompt` for the prompt text only.
+
+### 13. Redundant `|| false` in customer-portal `useUsageReportDataQuery.enabled`
+
+**[File: apps/customer-portal/services/usageReportData/index.ts]**
+**Function/Class:** `useUsageReportDataQuery`
+**Severity:** low
+**Problem:** The customer-portal service hook has:
+
+```typescript
+enabled:
+  (options?.enabled !== false &&
+    !!params &&
+    params.organizationGroupIds.length > 0 &&
+    !!params.startDate &&
+    !!params.endDate) ||
+  false
+```
+
+The trailing `|| false` is redundant — the inner expression is already a boolean. (The creative-portal sibling hook doesn't have this.)
+**Impact:** Readability only.
+**Fix:** Drop `|| false`.
+
+### 14. `MIN_REPORT_DATE_ISO` comparison relies on lexicographic string ordering
+
+**[File: apps/creative-portal/api/mixtures/usageReportData/getUsageReportData.ts]**
+**Function/Class:** `getUsageReportData`
+**Severity:** low
+**Problem:** `earliestChargeTimestamp.split("T")[0] < MIN_REPORT_DATE_ISO` relies on the fact that `YYYY-MM-DD` sorts lexicographically in chronological order. The code comments call this out, which is good, but the pattern is non-obvious and silently breaks if a timestamp ever arrives without the ISO date prefix.
+**Impact:** Low — ISO format is stable. Documentation-only concern.
+**Fix:** Optional — convert to a Date comparison for clarity:
 
 ```typescript
 const chargeDate = new Date(earliestChargeTimestamp);
@@ -91,131 +218,57 @@ const minDate = new Date(MIN_REPORT_DATE_ISO);
 if (chargeDate < minDate) return null;
 ```
 
-### 5. `useUsageReportDataQuery` enabled logic has redundant `|| false`
-
-**[File: apps/creative-portal/services/usageReportData/index.ts]**
-**Function/Class:** `useUsageReportDataQuery`
-**Severity:** low
-**Problem:** The `enabled` option is:
-```typescript
-enabled:
-  (options?.enabled !== false &&
-    !!params &&
-    params.organizationGroupIds.length > 0) ||
-  false
-```
-The `|| false` is redundant — the boolean expression already evaluates to `false` when the conditions aren't met.
-**Impact:** No functional issue; just confusing to read.
-**Fix:** Remove `|| false`:
-
-```typescript
-enabled:
-  options?.enabled !== false &&
-  !!params &&
-  params.organizationGroupIds.length > 0
-```
-
-### 6. Inline styles in OrganizationFilter hooks
-
-**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/partials/OrganizationFilter/hooks.ts]**
-**Function/Class:** `useOrganizationFilter`
-**Severity:** low
-**Problem:** The `styles` memo hardcodes CSS values (`borderRadius: "0.375rem"`, `minHeight: "2.25rem"`, `boxShadow: "0 1px 1px rgba(0, 0, 0, 0.05)"`) inline rather than using theme tokens. This is inconsistent with the project's convention of using theme values for styling.
-**Impact:** Harder to maintain if the design system changes; doesn't follow the co-located styles pattern.
-**Fix:** Move these values to the theme or use existing theme tokens. At minimum, use `theme.shadows` for the box-shadow.
-
-### 7. `calculateOrderTotal` removes test for `processingFeeRate` derivation
-
-**[File: packages/shared/utils/usageReport/calculateOrderTotal.test.ts]**
-**Function/Class:** `calculateOrderTotal` test
-**Severity:** low
-**Problem:** The test "does not derive fee from rate fields" was removed during the move from customer portal to shared. This test verified that `processingFeeRate`/`processingFeeQuantity`/`processingFeeUnit` are NOT used to derive the processing fee — an important behavioral guarantee.
-**Impact:** If someone later adds fee derivation from rate fields, there's no test guarding against it.
-**Fix:** Consider keeping the test, adapted to the new `OrderDetailForCalculation` type. If the type no longer has those fields, the test may have been correctly removed — but document this decision.
-
-### 8. `year` field added to `MonthlyUsageData` but customer portal test mock could be more explicit
-
-**[File: apps/customer-portal/components/pages/reports/usage/index.test.tsx]**
-**Function/Class:** test mock data
-**Severity:** low
-**Problem:** The `year` field was added to `MonthlyUsageData` and the test mock data was updated. However, the mock has `year: 2026` for all entries. While this is fine for testing, the customer portal's `hooks.ts` now adds `year` from the month key parsing — this path should be explicitly tested.
-**Impact:** If the year parsing in customer portal hooks breaks, existing tests wouldn't catch it since they mock the entire hook return.
-**Fix:** Add a test case in `hooks.test.ts` that verifies the `year` field is correctly derived from order dates spanning multiple years.
-
-### 9. `formatUsageCost` not exported from shared barrel
-
-**[File: packages/shared/utils/usageReport/index.ts]**
-**Function/Class:** barrel export
-**Severity:** low
-**Problem:** `formatUsageCost` is exported from `packages/shared/utils/usageReport/index.ts`, which is correct. However, `SummaryCards` and `CustomTooltip` import it directly from `@proofed/shared/utils/usageReport` (the barrel). This is fine but worth verifying the barrel export includes it — confirmed it does via `export { formatUsageCost } from "./formatUsageCost"`.
-**Impact:** None — this is working correctly.
-**Fix:** No fix needed.
-
-### 10. `isClientApi: false` hardcoded in creative portal charge processing
-
-**[File: apps/creative-portal/api/utils/charges/fetchChargesForOrder.ts]**
-**Function/Class:** `fetchChargesForOrder`
-**Severity:** low
-**Problem:** `enhanceTotalChargeEntry` is called with `isClientApi: false`. This is correct for the admin/creative portal context. However, the customer portal's `fetchChargesForOrder` presumably uses `isClientApi: true`. The two implementations have diverged — the creative portal version adds `isBeforeChargeData` logic and minimum charge fallback that may not exist in the customer portal version.
-**Impact:** The creative portal's charge processing is more sophisticated than the customer portal's, which could lead to charge total discrepancies between the two portals for the same orders.
-**Fix:** Document the intentional divergence. If the charge processing should be identical, consider sharing the `fetchChargesForOrder` logic.
-
-### 11. Color inconsistency between SummaryCards and CustomTooltip
+### 15. `CustomTooltip` uses `pastelGreen1` while bars and cards use `green1`
 
 **[File: packages/shared/components/molecules/UsageReport/UsageChart/partials/CustomTooltip/index.tsx]**
 **Function/Class:** `CustomTooltip`
 **Severity:** low
-**Problem:** CustomTooltip uses `theme.colors.pastelGreen1` for the "Complete" dot, while SummaryCards uses `theme.colors.green1` for the complete accent color. The chart bars also use `green1`. This creates a visual inconsistency where the tooltip dot color doesn't match the bar color or the summary card accent.
-**Impact:** Minor visual inconsistency in the report. Users may notice the tooltip dot color differs from the bar and card accent.
-**Fix:** Use `theme.colors.green1` in the tooltip for consistency, or if `pastelGreen1` is intentional for tooltip legibility, add a comment explaining the design choice.
+**Problem:** The tooltip's "Complete" dot uses `theme.colors.pastelGreen1`, but `SummaryCards`'s Complete accent and the chart's `completeOrders` bar use `theme.colors.green1`. Three different presentations of "Complete" in the same view.
+**Impact:** Minor visual inconsistency.
+**Fix:** Use `theme.colors.green1` in the tooltip for consistency, or add a one-line comment if `pastelGreen1` is intentionally chosen for tooltip legibility.
 
-### 12. Props destructuring not in alphabetical order
+### 16. Hook return destructuring in `ClientUsage/index.tsx` isn't alphabetical
 
 **[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/index.tsx]**
 **Function/Class:** `ClientUsage`
 **Severity:** low
-**Problem:** The hook return destructuring in `ClientUsage/index.tsx` is not alphabetized:
-```typescript
-const {
-  summary, monthlyData, orgGroups, selectedOrgId,
-  handleOrgChange, selectedOrgGroupIds, ...
-} = useClientUsageReport();
-```
-Per CLAUDE.md: "Destructuring in `index.tsx` follows the same order" (alphabetical).
-**Impact:** Violates project convention. Same issue exists in `OrganizationFilter/index.tsx` and `OrganizationFilter/hooks.ts` where props are destructured as `selectedOrgId, onOrgChange, isLoading` instead of alphabetical `isLoading, onOrgChange, selectedOrgId`.
-**Fix:** Reorder destructuring to alphabetical in all three files.
+**Problem:** Destructuring order: `summary, monthlyData, orgGroups, selectedOrgId, handleOrgChange, selectedOrgGroupIds, setSelectedOrgGroupIds, isLoading, hasError, hasOrgGroupsError`. Per CLAUDE.md, alphabetical destructuring is preferred (and enforced by `eslint-plugin-perfectionist` for props interfaces).
+**Impact:** Style only.
+**Fix:** Reorder both the hook return and the destructuring alphabetically.
 
-### 13. Missing unit test for OrganizationFilter hooks
+### 17. Per-portal `fetchChargesForOrder` divergence
 
-**[File: apps/creative-portal/components/pages/reporting/partials/ClientUsage/partials/OrganizationFilter/]**
-**Function/Class:** `useOrganizationFilter`
+**[File: apps/creative-portal/api/utils/charges/fetchChargesForOrder.ts]**
+**Function/Class:** `fetchChargesForOrder`
 **Severity:** low
-**Problem:** `OrganizationFilter/hooks.ts` contains non-trivial logic (style computation, option mapping from organizations, change handler with type narrowing) but has no dedicated `hooks.test.ts`. The component test (`index.test.tsx`) tests integration but not the hook logic directly.
-**Impact:** Hook-level logic changes could regress without detection.
-**Fix:** Add `OrganizationFilter/hooks.test.ts` to directly test option building, style customization, and the change handler callback.
+**Problem:** The creative-portal `fetchChargesForOrder` calls `enhanceTotalChargeEntry({ ..., isClientApi: false })` and includes the `isBeforeChargeData` enhancement (minimum-charge fallback via `fetchOrderById`, synthesized total charge when none exists, words-unit detection). The customer-portal sibling presumably passes `isClientApi: true` and may have different enhancement behavior.
+**Impact:** Two portals could produce different totals for the same order if the enhancement logic drifts further apart.
+**Fix:** Document the intentional `isClientApi` divergence at the function level, and consider extracting the shared enhancement pipeline into `@proofed/shared` if it must remain bit-identical across portals.
+
+### 18. `calculateOrderTotal` lost the "does not derive fee from rate fields" test in the move
+
+**[File: packages/shared/utils/usageReport/calculateOrderTotal.test.ts]**
+**Function/Class:** `calculateOrderTotal` test
+**Severity:** low
+**Problem:** Develop's `apps/customer-portal/utils/calculateOrderTotal.test.ts` includes a test "does not derive fee from rate fields" (around line 496) that verified `processingFeeRate` / `processingFeeQuantity` / `processingFeeUnit` are NOT used to derive the processing fee. After the move to shared, the test is gone. The new `OrderDetailForCalculation` type no longer carries those fields, but the safety guarantee they tested is still worth a regression test.
+**Impact:** If someone later widens `OrderDetailForCalculation` or re-introduces rate-based derivation, there's no test guarding the prior behavior.
+**Fix:** Port the test to the shared file using the current `OrderDetailForCalculation` shape (assert that adding noise fields to `orderDetail` doesn't change `processingFee`), or add a one-line comment in the new test file explaining why the test was intentionally dropped.
 
 ---
 
 ## Tests
 
-- ✅ `getUsageReportData` (creative-portal): 359 lines, covers org group deduplication, order status filtering, charge timestamp bucketing, MIN_REPORT_DATE filtering, no-charge orders, failed charge fetches, concurrency cap — comprehensive
-- ✅ `fetchChargesForOrder`: 252 lines, covers isBeforeChargeData paths, minimumChargeAmount fallback, synthesized total charge, error resilience, logger integration — thorough
-- ✅ `useClientUsageReport` hooks: 171 lines, covers org selection, project reset, fallback to all groups, loading state, summary/monthly derivation — good
-- ✅ `OrganizationFilter`: 181 lines, covers rendering, org query, selection, clearing, loading state — good
-- ✅ `SummaryCards` (shared): 78 lines, covers rendering, showInProgress toggle, empty state — adequate
-- ✅ `ProjectFilter` (shared): updated from customer portal, adapted to `ProjectGroup` type — good
-- ✅ `CustomTooltip` (shared): 117 lines, covers active/inactive, year display, % complete calculation — good
-- ✅ `UsageChart/utils`: 147 lines, covers formatCostTick edge cases, calculateNiceTicks with integerOnly — thorough
-- ✅ `mapWithConcurrency`: 75 lines, covers ordering, concurrency limit, empty input, error propagation — solid
-- ✅ `computeOrderMetrics`: 62 lines, covers empty, aggregation, missing dates — good
-- ✅ `computeDateRange`: 86 lines, covers all options, min date clamping, custom dates — good
-- ✅ `calculateOrderTotal`: moved from customer portal, adapted types, removed some comments — adequate
-- ✅ Customer portal `getUsageReportData` test: 207 lines — new test added for existing endpoint
-- ⚠️ No test for `ClientUsage/index.tsx` component rendering (only hooks are tested) — the component's conditional rendering logic (error states, loading skeleton, no-org prompt) is not directly tested
-- ⚠️ No test for `OrganizationFilter/hooks.ts` — hook logic (style computation, option mapping, change handler) not unit tested
-- ⚠️ No integration test for the full filter cascade flow (org → project → data refresh)
-- ⚠️ `computeOrderMetrics` lacks tests for malformed/null `creationDateTime` and invalid ISO strings
-- ⚠️ `useClientUsageReport` hooks test lacks error state scenarios (query errors, null data)
+- ✅ `getUsageReportData.test.ts` (creative-portal) — bucketing by earliest charge timestamp, MIN_DATE filter, dedupe, status filter, concurrency cap, charge-fetch failure, empty input. Comprehensive.
+- ✅ `fetchChargesForOrder.test.ts` — `isBeforeChargeData` branches, minimumChargeAmount fallback (0 vs undefined), synthesized total, error resilience, logger integration, words-unit detection.
+- ✅ `ClientUsage/hooks.test.ts` — initial state, org-change reset, fallback to all groups, explicit selection, isFetching propagation, summary/monthly derivation.
+- ✅ `OrganizationFilter/index.test.tsx` — query, options, placeholder, selected value, change (numeric id + null), disabled state.
+- ✅ Shared utilities: `mapWithConcurrency`, `computeDateRange`, `computeOrderMetrics`, `calculateOrderTotal`, `formatUsageCost`, `UsageChart/utils`.
+- ✅ Shared components: `SummaryCards`, `CustomTooltip`, `ProjectFilter`.
+- ✅ Customer-portal `getUsageReportData.test.ts` added for the existing endpoint.
+- ❌ No UI test for `ClientUsage/index.tsx` (Issue #6).
+- ❌ No hook-level test for `OrganizationFilter/hooks.ts` (Issue #7).
+- ⚠️ Customer-portal `hooks.test.ts` doesn't exercise the `year` parsing path — fixtures pre-supply `year` (related to Issue #5).
+- ⚠️ Visual QA of the customer-portal tooltip + admin Customer tab vs Figma is not evidenced in the PR (manual-testing checkbox unchecked).
 
 ---
 
@@ -223,24 +276,37 @@ Per CLAUDE.md: "Destructuring in `index.tsx` follows the same order" (alphabetic
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Implementation matches Jira requirements (reduced scope) |
-| Regression risk | ⚠️ Medium — customer portal refactored to shared imports; charge processing differs between portals |
-| Tests | ✅ Comprehensive — 1,884 tests passing per PR description |
-| Code quality | ✅ Clean architecture, good separation, follows project conventions |
+| Correctness | ⚠️ Chart UI leaks deferred In Progress section into Admin tab (#2) |
+| Regression risk | ⚠️ Medium — customer-portal tooltip behavior changed (#5); API authorization gap (#1); per-org cost at scale (#3) |
+| Tests | ⚠️ Strong on hooks/utils/handlers; missing UI test on `ClientUsage/index.tsx` and hook test on `OrganizationFilter/hooks.ts` |
+| Code quality | ✅ Clean shared/portals split, well-commented trade-offs, follows project conventions |
 | Mergeable state | ✅ Clean |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions**
+**Request changes**
 
-1. **Verify role expansion** (Issue #1): Confirm with product that Returner and ServiceSupport should access the Client Usage Report. This is a security/authorization concern.
-2. **Document scalability limitations** (Issues #2, #3): The per-orderId charge fan-out and unbounded order fetch could be problematic for large organizations. Add logging/metrics and create a follow-up ticket to optimize.
-3. **Remove redundant `|| false`** (Issue #5): Minor cleanup.
-4. **Alphabetize destructuring** (Issue #12): Fix in `ClientUsage/index.tsx`, `OrganizationFilter/index.tsx`, and `OrganizationFilter/hooks.ts`.
-5. **Consider adding a `ClientUsage` component test** for the rendering paths (error banner, loading state, org prompt).
-6. **Consider keeping the removed `processingFeeRate` test** (Issue #7) or documenting why it was removed.
-7. **Add error state tests** for `useClientUsageReport` hook (query failures, null data scenarios).
+Must-fix before merge:
+1. Add `requiredRoles` (Admin / ServiceDelivery / Superadmin) to the new `/api/mixtures/usageReportData` handler. (Issue #1)
+2. Suppress the "In Progress" legend / bar / tooltip row / "% Complete" row / footer in `UsageChart` / `CustomTooltip` when out of scope. (Issue #2)
+3. Confirm the customer-portal tooltip's new "Mar 26"-style year display is intentional (visual QA + screenshot in PR). (Issue #5)
 
-Overall, this is a well-structured PR with good test coverage. The shared component extraction is clean and the admin-specific additions follow established patterns. The main concerns are around authorization (role expansion) and scalability (charge fan-out for large orgs).
+Should-fix:
+4. Push the date floor into `fetchOrders` and log order-count metrics. (Issue #3)
+5. Swap `isFetching` → `isLoading` in the admin hook to match customer-portal UX. (Issue #4)
+6. Add `ClientUsage/index.test.tsx` and `OrganizationFilter/hooks.test.ts`. (Issues #6, #7)
+7. Update the PR description to drop the `CustomerFilter` mention and call out deferred scope. (Issue #10)
+
+Nice-to-have:
+8. Tidy `useOrgGroups({ orgId: 0 })` sentinel. (Issue #9)
+9. Apply the spread prop-forwarding convention in `ClientUsage/index.tsx`. (Issue #11)
+10. Extract a `CenteredLoader` style instead of reusing `OrganizationPrompt`. (Issue #12)
+11. Document or short-circuit `mapWithConcurrency` rejection semantics. (Issue #8)
+12. Drop redundant `|| false` in customer-portal `useUsageReportDataQuery.enabled`. (Issue #13)
+13. Optional Date comparison for clarity on `MIN_REPORT_DATE_ISO`. (Issue #14)
+14. Align `CustomTooltip` dot color with bar/card accent (`green1` vs `pastelGreen1`). (Issue #15)
+15. Alphabetize hook return + destructuring in `ClientUsage`. (Issue #16)
+16. Document the `isClientApi` divergence at `fetchChargesForOrder`. (Issue #17)
+17. Port or annotate-out the dropped "does not derive fee from rate fields" `calculateOrderTotal` test. (Issue #18)
