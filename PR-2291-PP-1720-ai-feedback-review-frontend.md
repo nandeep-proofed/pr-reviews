@@ -4,10 +4,12 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1720
 **Status (Jira):** In Progress / Review (frontend-only, mock backend)
 **Base branch:** `develop`
-**Head SHA:** `cbf808ca40c48cf47cd804af327c15aba6cde106`
-**Size:** 47 files changed, +1,797 / −123, 11 commits, ~29 new tests
+**Head SHA:** `cbf808ca40c48cf47cd804af327c15aba6cde106` (initial review) → `17a1d788776e2d10c139c81320e9395a26c6e8d0` (re-review, after PP-1843 merge)
+**Size:** 47 files / +1,797 / −123 (initial) → **92 files / +7,590 / −305 (current, post-merge)**
 
-> **Companion PR:** [#2298 — PP-1843](https://github.com/Proofed/B2BWebserver/pull/2298) stacks on top and replaces `mockGenerateAiFeedback` with the real Proofed.ai backend integration + adds 110 more tests. The companion PR also addresses several findings here (panel-hook decomposition into 4 sub-hooks, real backend gates) — noted where relevant.
+> **Re-review summary (2026-05-25, head `17a1d78`):** PR #2298 (PP-1843 — real Proofed.ai backend integration) has been **merged into this PR** as merge commit `17a1d7887`. The merged code includes both PP-1843's hardening commits (`754326176` busboy/escape/word-count, `809c2a7e9` SanitizedHtml/double-click/blocklist/XSS-tests) that I reviewed previously in `PR-2298-PP-1843-proofed-ai-backend-integration.md`. This PR now contains the full PP-1720 + PP-1843 stack. Of the original 10 PR-2291 issues, **5 are fully resolved by the merge, 1 partially, 4 still apply**. The 7 of 9 PP-1843 issues that were fixed in #2298 carry forward; 2 PP-1843 issues remain deferred. **Recommendation upgraded to Approve.** See "Re-review — post PP-1843 merge" section at the bottom.
+
+> **Companion PR (now merged in):** [#2298 — PP-1843](https://github.com/Proofed/B2BWebserver/pull/2298) — replaced `mockGenerateAiFeedback` with the real Proofed.ai backend integration + added 110 more tests. The merge brought in the panel-hook decomposition into 4 sub-hooks, the server-side word-count gate, the `SanitizedHtml` branded type, and the new `useAiFeedbackEligibility` service hook.
 
 ---
 
@@ -58,7 +60,7 @@ Security profile is strong: client-side `sanitizeHtml` at two boundaries, Sentry
 
 ## Issues Found
 
-### 1. `useAiFeedbackPanel` (288 LOC) has no direct tests
+### 1. `useAiFeedbackPanel` (288 LOC) has no direct tests — ✅ Resolved by PP-1843 merge
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useAiFeedbackPanel.ts]**
 **Function/Class:** `useAiFeedbackPanel`
@@ -67,7 +69,7 @@ Security profile is strong: client-side `sanitizeHtml` at two boundaries, Sentry
 **Impact:** AC §2 ("validation runs each time a new file is uploaded"), §4.5 (cancel restores standard form), §6 ("only one generation may run at a time"), §7 (retry-after-edit), §8.2 (navigate-away cancels), and §9 (org gate) all live in this hook and are functionally untested. A regression in `cancelInFlight` (e.g. someone removes the `controller.abort()`) wouldn't be caught.
 **Fix:** Add `useAiFeedbackPanel.test.tsx` using `renderHook` from `@testing-library/react` with a Formik wrapper. Cover at minimum: new-file → drafting, size-fail → unavailable, word-count-fail → unavailable, cancel restores snapshot, unmount aborts, `?aiTimeout=long` toggles timeout state, Sentry status forwarded. Note: PP-1843 (PR #2298) decomposes this hook into 4 sub-hooks each with their own tests (23 cases total), so the gap is largely closed downstream. Still worth a stub here so PP-1720 doesn't merge without orchestrator coverage.
 
-### 2. `index.tsx` violates the project's UI-only convention; significant duplication between `ReviewSubmission` and `ReviewForm`
+### 2. `index.tsx` violates the project's UI-only convention; significant duplication between `ReviewSubmission` and `ReviewForm` — ⚠️ Partially mitigated (still applies)
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/JobManagement/partials/ReviewSubmission/index.tsx, apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderJobs/partials/FormModal/partials/ReviewForm/index.tsx]**
 **Function/Class:** both `ReviewSubmission` and `ReviewForm` top-level components
@@ -85,7 +87,7 @@ const {
 } = useReviewSubmissionFormState({ isReviewerFlow });
 ```
 
-### 3. `workItemFormat === "JSON"` is a stringly-typed comparison; `=== 1` excellent-score sentinel duplicated 5 places
+### 3. `workItemFormat === "JSON"` is a stringly-typed comparison; `=== 1` excellent-score sentinel duplicated 5 places — ❌ Still applies (verified on remote head `17a1d78`)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/index.tsx + 4 others]**
 **Function/Class:** `AiFeedbackPanel` + consumer components + `FormModal/hooks.ts` + `Submission/hooks.ts`
@@ -105,7 +107,7 @@ const isHtmlReview = workItemFormat === WORK_ITEM_FORMAT.JSON;
 export const REVIEW_SCORE_EXCELLENT = 1;
 ```
 
-### 4. `useReviewAiDisabled` has no test file — AC §9's only enforcement
+### 4. `useReviewAiDisabled` has no test file — AC §9's only enforcement — ❌ Still applies (moved to `services/aiReviewFeedback/`, still untested)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useReviewAiDisabled.ts]**
 **Function/Class:** `useReviewAiDisabled`
@@ -114,7 +116,7 @@ export const REVIEW_SCORE_EXCELLENT = 1;
 **Impact:** A regression that flips the return value to always-false (e.g. someone changes `!!data?.disableAi` to `false` while debugging) would silently break the org-level kill switch.
 **Fix:** Add `useReviewAiDisabled.test.ts` covering: undefined org-group ID → `enabled: false` and `isAiDisabled: false`; valid ID + `disableAi: true` → `isAiDisabled: true`; valid ID + `disableAi: false` → `isAiDisabled: false`; valid ID + null/missing data → `isAiDisabled: false`. Note: in PP-1843, this hook moves to `services/aiReviewFeedback/useReviewAiDisabled.ts` — still untested there.
 
-### 5. Pre-draft snapshot semantics surprise on retry-after-edit
+### 5. Pre-draft snapshot semantics surprise on retry-after-edit — ✅ Resolved by PP-1843 merge (`useFormikSnapshot` sub-hook + 3 tests)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useAiFeedbackPanel.ts]**
 **Function/Class:** `useAiFeedbackPanel` (the file-watch effect + `triggerAi`)
@@ -123,7 +125,7 @@ export const REVIEW_SCORE_EXCELLENT = 1;
 **Impact:** Minor UX surprise. Not a data-loss issue (the edit is restored, not destroyed). Worth confirming with PM whether the AC author intended "cancel restores the truly-pre-AI state" or "cancel restores whatever was there immediately before this retry".
 **Fix:** Either (a) document the chosen semantic clearly in a code comment, (b) only capture the snapshot on the FIRST run (skip overwrite if `preDraftSnapshotRef.current !== null && state !== "drafted"`), or (c) capture two snapshots — first-run + per-retry — and offer the user a "Undo all AI" affordance. Option (a) is the cheapest if PM confirms current behavior is intended.
 
-### 6. `triggerAi` (HTML manual path) skips word-count validation
+### 6. `triggerAi` (HTML manual path) skips word-count validation — ✅ Resolved by PP-1843 merge (server-side word-count gate via `order.workItemSize` in `754326176`)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useAiFeedbackPanel.ts]**
 **Function/Class:** `triggerAi`
@@ -132,7 +134,7 @@ export const REVIEW_SCORE_EXCELLENT = 1;
 **Impact:** HTML reviewers on large documents waste time on a request that may fail downstream. AC §2 says "validation must be evaluated each time a new file is uploaded" — HTML has no file, so the AC is technically silent. But the 30K word limit is presumably a content limit, not a file-size proxy.
 **Fix:** Either (a) accept this as an HTML-flow-only limitation and document it, or (b) move the word-count gate into `triggerAi` with an HTML-equivalent source. Note: PP-1843 adds a server-side word-count gate using `order.workItemSize` that covers both paths.
 
-### 7. CLAUDE.md violations — inline style + empty interface + button copy not in `consts.ts`
+### 7. CLAUDE.md violations — inline style + empty interface + button copy not in `consts.ts` — ✅ Resolved by PP-1843 merge (`GenerateFeedbackCard` replaces inline-styled placeholder button; copy now lives in card consts)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/index.tsx, AiUnavailableHeader/types.ts]**
 **Function/Class:** `AiFeedbackPanel` HTML-trigger branch, `AiUnavailableHeaderProps`
@@ -158,7 +160,7 @@ export const AI_TRIGGER_BUTTON_LABEL = "Trigger AI"; // TBD per Figma
 export type AiUnavailableHeaderProps = Record<string, never>;
 ```
 
-### 8. `runAiDraft` is recreated every render (no `useCallback`)
+### 8. `runAiDraft` is recreated every render (no `useCallback`) — ✅ Resolved by PP-1843 merge (sub-hooks adopt ref pattern; per PP-1843 commit `b7f86c2c0`, last `exhaustive-deps` disable removed)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useAiFeedbackPanel.ts]**
 **Function/Class:** `runAiDraft`
@@ -167,7 +169,7 @@ export type AiUnavailableHeaderProps = Record<string, never>;
 **Impact:** Subtle. In practice the field names are static literals and `setFieldValue` is stable, so the staleness doesn't bite. But if anyone adds a dynamic dep, it'd silently desync.
 **Fix:** Either move the captured-via-closure values into refs (`valuesRef.current = values` in a layout effect, then read `valuesRef.current` inside `runAiDraft`) for explicit "always-fresh" semantics, or accept the closure and add a comment explaining that field-name props must be static. Option 1 is preferable — it's also the pattern PP-1843 adopts in `useActiveUuidLifecycle`/`useAutoTriggerOnFileUpload`.
 
-### 9. `useReviewAiDisabled(0)` magic-number fallback
+### 9. `useReviewAiDisabled(0)` magic-number fallback — ❌ Still applies (file moved to `services/aiReviewFeedback/`, but `?? 0` and `!!organizationGroupId` gate unchanged)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useReviewAiDisabled.ts]**
 **Function/Class:** `useReviewAiDisabled`
@@ -191,7 +193,7 @@ export const useReviewAiDisabled = (
 };
 ```
 
-### 10. Sentry capture loses stack trace (intentional but worth noting)
+### 10. Sentry capture loses stack trace (intentional but worth noting) — ⏸ Unchanged (same scrub philosophy now applied across PP-1843 server/client paths)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/utils.ts]**
 **Function/Class:** `captureAiError`
@@ -260,3 +262,67 @@ Out of scope for this PR (handled in PP-1843):
 - HTML word-count gate on the manual-trigger path (server-side gate added in PP-1843).
 - Real backend integration; mock removal.
 - Server-side validation mirroring the 25MB / 30K-word client gates.
+
+---
+
+## Re-review — post PP-1843 merge (head `17a1d78`, 2026-05-25)
+
+PR #2298 (PP-1843 — the real Proofed.ai backend integration) was merged into this branch as merge commit `17a1d7887 feature/PP-1843: Proofed.ai backend integration for AI review feedback (#2298)`. This PR now contains the entire PP-1720 + PP-1843 stack. Both PP-1843 follow-up hardening commits (`754326176` server hardening, `809c2a7e9` quick wins) are reachable from the new head. Verification was done against the remote ref `refs/pull/2291/head` via the GitHub MCP, not against local working state.
+
+### Original PR-2291 issues — resolution status
+
+| # | Issue | Status | Notes |
+|---|---|---|---|
+| 1 | `useAiFeedbackPanel` 288 LOC untested | ✅ Resolved | Merge decomposed the hook into 4 sub-hooks each with dedicated tests: `useAiFeedbackPanel.test.tsx` (9 cases, 11.6 kB), `useActiveUuidLifecycle.test.tsx` (4 cases, 4.5 kB), `useAutoTriggerOnFileUpload.test.tsx` (7 cases, 3.7 kB), `useFormikSnapshot.test.tsx` (3 cases, 2.6 kB). |
+| 2 | `index.tsx` housing state + consumer duplication | ⚠️ Partial | PP-1843's `useAiFeedbackEligibility` collapses three derivations into one destructure in both consumers — meaningful simplification. But: `ReviewSubmission/index.tsx` (verified on remote) still hosts three `useState` calls (`isAiBusy`, `isAiUnavailable`, `isAiActive`), a Formik-context `useEffect`, and derived computations directly in `index.tsx`. CLAUDE.md UI-only convention still violated; the structural duplication between `ReviewSubmission` and `ReviewForm` is reduced but not eliminated. |
+| 3 | `workItemFormat === "JSON"` stringly-typed; `=== 1` magic-number | ❌ Still applies | Verified on remote: `AiFeedbackPanel/index.tsx:31` still has `const isHtmlReview = workItemFormat === "JSON";`. `WORK_ITEM_FORMAT.JSON` is now imported into `useAiFeedbackEligibility` (good) but not used in this call site. `isExcellentScore = values[scoreFieldName] === 1` also unchanged. |
+| 4 | `useReviewAiDisabled` no test file | ❌ Still applies | File moved to `services/aiReviewFeedback/useReviewAiDisabled.ts` but **no test file** exists in the directory listing. Still AC §9's only enforcement. |
+| 5 | Pre-draft snapshot semantics fragile | ✅ Resolved | PP-1843 extracted snapshot/restore into `useFormikSnapshot` sub-hook with 3 dedicated tests covering capture, restore-on-cancel, and overwrite-on-retry semantics. |
+| 6 | HTML manual-trigger skips word-count | ✅ Resolved | PP-1843 commit `754326176` added a server-side word-count gate using `order.workItemSize` that returns 413 before `provider.submit`. Covers both DOCX and HTML paths uniformly. |
+| 7 | Inline style + hardcoded "Trigger AI" + empty interface | ✅ Resolved | Verified on remote: `<span style={{ alignSelf: "flex-start" }}>` is gone, replaced by `<GenerateFeedbackCard onTrigger={triggerAi} isSubmitting={isSubmitting} />`. Card copy lives in `GenerateFeedbackCard/index.tsx`. |
+| 8 | `runAiDraft` not memoised; closure staleness | ✅ Resolved | Per PP-1843 commit `b7f86c2c0`, sub-hooks "adopt the ref pattern… to remove the last `react-hooks/exhaustive-deps` disable in the panel". Closure-staleness concern designed out. |
+| 9 | `useReviewAiDisabled(0)` magic-number fallback | ❌ Still applies | Verified on remote: hook moved to `services/aiReviewFeedback/useReviewAiDisabled.ts` but body unchanged — `organizationGroupId ?? 0, { enabled: !!organizationGroupId }`. Gated, but the anti-pattern persists. |
+| 10 | Sentry capture loses stack trace | ⏸ Unchanged | Scrub philosophy ported into PP-1843's server-side `captureMessage` calls and `captureAiError`. Long-term `beforeSend` scrubber still a future improvement, not a regression. |
+
+**Score:** 5 fully resolved, 1 partially resolved, 4 still apply (all low-to-medium severity). The remaining items are code-quality follow-ups, not correctness or security issues.
+
+### Inherited PP-1843 issue status
+
+The PR-2298 review (`PR-2298-PP-1843-proofed-ai-backend-integration.md`) flagged 9 issues; 7 were fixed in `754326176` + `809c2a7e9` before the merge. Carrying forward:
+
+| PP-1843 # | Issue | Status |
+|---|---|---|
+| 1 | bb.on(finish)/bb.on(error) double-response race | ✅ Fixed in `754326176` |
+| 2 | Unescaped text blocks in `blockFormatFileToHtml` | ✅ Fixed in `754326176` |
+| 3 | `DraftedState` trust-contract fragility | ✅ Fixed in `809c2a7e9` (SanitizedHtml brand) |
+| 4 | `BLOCKED_FORMATS` consistency | ✅ Fixed in `809c2a7e9` (shared `GOOGLE_DRIVE_FILE_FORMATS`) |
+| 5 | `triggerAi` no double-click guard | ✅ Fixed in `809c2a7e9` |
+| 6 | Cancel + getStatus handler-shell integration tests | ⏸ Still deferred |
+| 7 | Server-side word-count gate | ✅ Fixed in `754326176` |
+| 8 | `useAiFeedbackEligibility` test file | ⏸ Still deferred |
+| 9 | XSS regression test for `marked` path | ✅ Fixed in `809c2a7e9` |
+
+Two PP-1843 items remain deferred per the PR description's "Open follow-ups" section: cancel/getStatus handler-shell tests (low-severity test-coverage gap), `useAiFeedbackEligibility` test file (which would also address PR-2291 Issue #4 if added).
+
+### Updated summary
+
+| Aspect | Initial review (head `cbf808c`) | Re-review (head `17a1d78`) |
+|---|---|---|
+| Correctness | ✅ All ACs addressed | ✅ ACs + real backend integration + server-trusted gates |
+| Regression risk | ⚠️ Medium — orchestrator untested | ✅ Low — orchestrator decomposed + tested; backend gates server-trusted |
+| Tests | ⚠️ Hook layer untested | ✅ Strong — ~140 tests across hooks, services, strategy, handlers, UI |
+| Code quality | ⚠️ CLAUDE.md violations + duplication + stringly-typed | ⚠️ Improved but: index.tsx still holds state; `"JSON"` literal + magic-number `1` persist |
+| Mergeable state | ✅ Clean | ✅ Clean |
+| Security | ✅ Sanitize + Sentry scrub + dev-flag gating | ✅ + server-side word-count + race-safe response + SanitizedHtml brand + auth fail-closed |
+
+### Updated recommendation
+
+**Approve.** _(Upgraded from "Approve with suggestions" — the PP-1843 merge resolved 5 of 10 PR-2291 findings and brought in 7 hardening fixes from its own review.)_
+
+Suggested follow-up tickets (none blocking):
+
+1. **`useReviewAiDisabled` test file** (Issue #4) + **`useAiFeedbackEligibility` test file** (PP-1843 #8) — together these would cover the org-gate kill switch + the composite eligibility computation. Both are small files; one PR could land both.
+2. **Use `WORK_ITEM_FORMAT.JSON` constant** at `AiFeedbackPanel/index.tsx:31` (Issue #3, one-line change) — and extract `REVIEW_SCORE_EXCELLENT = 1` alongside `REVIEW_SCORE_OPTIONS`.
+3. **Extract `useReviewSubmissionFormState({ isReviewerFlow })`** (Issue #2) to remove the residual state/effect duplication between `ReviewSubmission` and `ReviewForm` and restore the CLAUDE.md "index.tsx is UI-only" convention.
+4. **Tighten `useReviewAiDisabled(?? 0)` fallback** (Issue #9) — small ergonomic improvement.
+5. **Cancel + getStatus handler-shell integration tests** (PP-1843 #6) — already disclosed as a deferred follow-up in PR #2298's description.
