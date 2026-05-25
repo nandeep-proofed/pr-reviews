@@ -4,8 +4,10 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1843
 **Status (Jira):** Code Review
 **Base branch:** `feature/PP-1720-ai-feedback-review` (stacked PR — not `develop`)
-**Head SHA:** `8902a2613eb98a255f3bfd95b9e5ef76bbb115e4`
-**Size:** 67 files changed, +6,273 / −794, 43 commits, ~110 new tests
+**Head SHA:** `8902a2613eb98a255f3bfd95b9e5ef76bbb115e4` (initial review) → `809c2a7e99fcd28645df49fd6700f6a9cd81c140` (re-review)
+**Size:** 68 files changed, +6,400 / −789, 45 commits, ~112 new tests
+
+> **Re-review summary (2026-05-25, after head `809c2a7`):** Seven of nine flagged issues resolved across two follow-up commits (`754326176`, `809c2a7e9`). All three medium-severity issues are addressed. Recommendation upgraded to **Approve**. See "Re-review — resolution status" section at the bottom.
 
 ---
 
@@ -62,7 +64,7 @@ The PR is stacked on `feature/PP-1720-ai-feedback-review`. **Merge target should
 
 ## Issues Found
 
-### 1. Double-response race between `bb.on("finish")` and `bb.on("error")` after `fileStream.on("limit")`
+### 1. Double-response race between `bb.on("finish")` and `bb.on("error")` after `fileStream.on("limit")` — ✅ Fixed in `754326176`
 
 **[File: apps/creative-portal/api/aiReviewFeedback/apiHandlers/submit/index.ts]**
 **Function/Class:** `getAiReviewFeedbackSubmitHandler`
@@ -88,7 +90,7 @@ bb.on("error", (err: Error) => {
 
 Set `responseAlreadySent = true` immediately before each `res.status(...).json(...)` call (or simply check `res.headersSent` at the top of each handler).
 
-### 2. `processJsonReviewSubmission` ships unescaped text blocks as HTML to Proofed.ai
+### 2. `processJsonReviewSubmission` ships unescaped text blocks as HTML to Proofed.ai — ✅ Fixed in `754326176`
 
 **[File: apps/creative-portal/api/aiReviewFeedback/apiHandlers/submit/utils.ts]**
 **Function/Class:** `blockFormatFileToHtml`
@@ -119,7 +121,7 @@ const blockFormatFileToHtml = (file: BlockFormatFile): string =>
 
 For `type === "html"` blocks, content is already HTML (from the Tiptap export) and shouldn't be re-escaped.
 
-### 3. `DraftedState` trusts caller to pre-sanitize — no defense in depth at the render boundary
+### 3. `DraftedState` trusts caller to pre-sanitize — no defense in depth at the render boundary — ✅ Fixed in `809c2a7e9` (SanitizedHtml branded type)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/partials/AiFeedbackCard/partials/DraftedState/index.tsx]**
 **Function/Class:** `DraftedState`
@@ -147,7 +149,7 @@ summary: sanitizeHtml(latestStatus.summary ?? "") as SanitizedHtml
 
 The branded-type approach is preferable — it pushes the contract into the type system without paying runtime cost.
 
-### 4. `BLOCKED_FORMATS` case-sensitivity is inconsistent with the JSON branch
+### 4. `BLOCKED_FORMATS` case-sensitivity is inconsistent with the JSON branch — ✅ Fixed in `809c2a7e9` (reuses shared `GOOGLE_DRIVE_FILE_FORMATS`)
 
 **[File: apps/creative-portal/api/aiReviewFeedback/apiHandlers/submit/index.ts]**
 **Function/Class:** `getAiReviewFeedbackSubmitHandler` (the gate at line 148)
@@ -164,7 +166,7 @@ const isJsonFormat = workItemFormatUpper === "JSON";
 
 Or use the existing `WORK_ITEM_FORMAT` enum on both sides.
 
-### 5. `triggerAi` has no double-invocation guard
+### 5. `triggerAi` has no double-invocation guard — ✅ Fixed in `809c2a7e9` (hook short-circuit + button `disabled`)
 
 **[File: apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useAiFeedbackPanel.ts]**
 **Function/Class:** `triggerAi` (called from `GenerateFeedbackCard` button)
@@ -182,7 +184,7 @@ const triggerAi = useCallback(() => {
 
 Alternatively, disable the button while `submit.isLoading` in `GenerateFeedbackCard`.
 
-### 6. Cancel and getStatus handler shells lack integration tests
+### 6. Cancel and getStatus handler shells lack integration tests — ⏸ Deferred (follow-up ticket per PR description)
 
 **[File: apps/creative-portal/api/aiReviewFeedback/apiHandlers/cancel/index.ts, getStatus/index.ts]**
 **Function/Class:** handler shells
@@ -195,7 +197,7 @@ Alternatively, disable the button while `submit.isLoading` in `GenerateFeedbackC
 
 The PR mentions ~400-800 LOC of busboy/middleware mock scaffolding required — that's a fair reason to defer for submit, but cancel and getStatus don't use busboy and are simpler to mock.
 
-### 7. Server doesn't enforce the 30K word-count gate on submit
+### 7. Server doesn't enforce the 30K word-count gate on submit — ✅ Fixed in `754326176` (uses `order.workItemSize` → 413)
 
 **[File: apps/creative-portal/api/aiReviewFeedback/apiHandlers/submit/index.ts]**
 **Function/Class:** `getAiReviewFeedbackSubmitHandler`
@@ -204,7 +206,7 @@ The PR mentions ~400-800 LOC of busboy/middleware mock scaffolding required — 
 **Impact:** Bypassing the gate would either succeed (Proofed.ai accepts it and charges us for the larger document) or fail upstream (still wastes capacity). Not a security issue but defeats a cost-control gate. The client gate is sufficient for normal use; this is hardening.
 **Fix:** Mirror the 25MB pattern — compute reviewer word count after `processWorkItemContentWithMetadata` resolves and reject with 413 if it exceeds `MAX_AI_REVIEW_FEEDBACK_WORD_COUNT`. Or defer with a follow-up ticket if the cost of the word-count calc is significant.
 
-### 8. `useAiFeedbackEligibility` has no test file in the diff
+### 8. `useAiFeedbackEligibility` has no test file in the diff — ⏸ Deferred (low-severity follow-up)
 
 **[File: apps/creative-portal/services/aiReviewFeedback/useAiFeedbackEligibility.ts]**
 **Function/Class:** `useAiFeedbackEligibility`
@@ -213,7 +215,7 @@ The PR mentions ~400-800 LOC of busboy/middleware mock scaffolding required — 
 **Impact:** A regression that flips `isEligible` to `true` when it shouldn't be (or vice versa) would silently degrade UX in two surfaces. Tests at the consumer level (`ReviewSubmission`, `ReviewForm`) may exercise some paths but not the hook contract directly.
 **Fix:** Add `useAiFeedbackEligibility.test.tsx` covering the matrix: disabled → false; blocked format → false; over word-count → false; happy path → true; admin role bypass cases if any.
 
-### 9. `tone_notes` XSS regression test missing
+### 9. `tone_notes` XSS regression test missing — ✅ Fixed in `809c2a7e9` (note: real surface was `summary` + `finding.summary`, not `tone_notes`)
 
 **[File: apps/creative-portal/api/aiReviewFeedback/apiHandlers/getStatus/utils.test.ts]**
 **Function/Class:** `formatAiSummaryAsHtml`
@@ -241,49 +243,94 @@ it("escapes raw HTML in tone_notes before passing to marked", () => {
 
 - ✅ Server-side strategy: 4 cases in `strategy/ai-review-feedback.test.ts` (covers happy path + 502/auth/network paths)
 - ✅ Submit handler: 7 cases in `submit/index.test.ts` (auth, format gate, JSON branch, file branch, session save, 413, missing reviewer)
-- ✅ `formatAiSummaryAsHtml` + helpers: 22 cases in `getStatus/utils.test.ts` (escape, markdown roundtrip, findings/examples shaping)
+- ✅ `formatAiSummaryAsHtml` + helpers: 24 cases in `getStatus/utils.test.ts` (escape, markdown roundtrip, findings/examples shaping) — **+2 new XSS regression tests** in `809c2a7e9` pinning `<script>` in `summary` and `<img onerror>` in `finding.summary` are escaped before `marked.parse`
 - ✅ Service-layer hooks: 4 cases in `services/aiReviewFeedback/index.test.tsx` (submit/getStatus/cancel + cache eviction)
 - ✅ Panel hook + sub-hooks: 23 cases across 4 test files
-- ✅ UI components: 28 cases (`AiFeedbackPanel`, `DraftedState`, `ReviewSubmission`, `ReviewForm`)
-- ✅ Shared utils: `getMimeTypeFromFileName` extended (+30 lines); `verifyReviewerJobAssignment` 10 cases including strict-equality / fail-closed / error paths
-- ❌ Cancel handler integration tests — none direct
-- ❌ getStatus handler integration tests — utils only
-- ❌ `useAiFeedbackEligibility` — no test file
-- ❌ XSS regression test for `marked` markdown path
+- ✅ UI components: 28 cases (`AiFeedbackPanel`, `DraftedState`, `ReviewSubmission`, `ReviewForm`) — `DraftedState` fixtures updated to cast literals to `SanitizedHtml` to mirror the producer contract
+- ✅ Shared utils: `getMimeTypeFromFileName` extended (+30 lines); `verifyReviewerJobAssignment` 10 cases including strict-equality / fail-closed / error paths; new `escapeHtml` helper extracted in `754326176`
+- ❌ Cancel handler integration tests — still none direct (deferred per PR description)
+- ❌ getStatus handler integration tests — utils only (deferred per PR description)
+- ❌ `useAiFeedbackEligibility` — no dedicated test file (deferred low-severity follow-up)
 - ⚠️ Manual test plan present in PR description; covers DOCX, HTML/JSON, admin, disableAi, 25MB, >30K words
 
 ---
 
 ## Summary
 
-| Aspect | Status |
-|---|---|
-| Correctness | ✅ |
-| Regression risk | ⚠️ Medium — stacked on PP-1720; deletes mock provider; significant refactor of the panel hook |
-| Tests | ⚠️ Strong on hooks/services/strategy; gap on cancel + getStatus handler shells and eligibility hook |
-| Code quality | ✅ |
-| Mergeable state | ✅ Clean |
-| Security | ✅ — defense-in-depth XSS, fail-closed auth, server-trusted format, busboy 413, session sweep |
+| Aspect | Status (initial review) | Status (re-review @ `809c2a7`) |
+|---|---|---|
+| Correctness | ✅ | ✅ — busboy race + text-block escape + word-count gate fixed |
+| Regression risk | ⚠️ Medium — stacked on PP-1720; deletes mock provider; panel-hook rewrite | ✅ Low — race conditions and trust contracts resolved; branded type adds compile-time safety |
+| Tests | ⚠️ Gap on cancel/getStatus handler shells, eligibility hook, marked XSS path | ✅ XSS regression tests added; two handler-shell + eligibility gaps remain (both deferred follow-ups) |
+| Code quality | ✅ | ✅ — `escapeHtml` extracted to shared util; shared `GOOGLE_DRIVE_FILE_FORMATS` reused for blocklist |
+| Mergeable state | ✅ Clean | ✅ Clean |
+| Security | ✅ Defense-in-depth XSS, fail-closed auth, server-trusted format, busboy 413, session sweep | ✅ + server-side word-count gate, race-safe response, branded `SanitizedHtml` at trust boundary |
+
+**Issue resolution score:** 7 of 9 fixed (all 3 medium-severity, 4 of 6 low-severity). Two unresolved items are low-priority test-coverage gaps disclosed in the PR's "Open follow-ups" section.
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions.**
+**Approve.** _(Upgraded from "Approve with suggestions" after `754326176` + `809c2a7e9`.)_
 
-The PR is well-engineered, faithfully mirrors the OCR reference architecture Jira asked for, and demonstrates real security discipline (five hardening commits prompted by review, all addressing real concerns). The acceptance-criteria mapping is complete or near-complete on every Jira requirement.
+The PR faithfully mirrors the OCR reference architecture Jira asked for and demonstrates real security discipline — seven hardening commits prompted by review, plus the two follow-up commits that resolved every medium-severity finding from this review. Acceptance-criteria mapping is complete on every Jira requirement.
 
-Suggested before merging the eventual PP-1720 stack to `develop`:
+**All originally-blocking suggestions have been addressed:**
 
-1. **Address the bb.on("finish") / bb.on("error") double-response race (issue #1)** — small fix, prevents a noisy log on every 25MB+ upload.
-2. **HTML-escape text blocks in `blockFormatFileToHtml` (issue #2)** — one-line fix using the existing `escapeHtml` helper; improves AI input quality.
-3. **Either re-sanitize in `DraftedState` or introduce a `SanitizedHtml` branded type (issue #3)** — pushes the trust contract into the type system.
+1. ✅ bb.on("finish") / bb.on("error") double-response race — `responseAlreadySent` sentinel + `req.unpipe(bb); req.destroy()` in `754326176`.
+2. ✅ HTML-escape text blocks in `blockFormatFileToHtml` — extracted `escapeHtml` to `packages/shared/utils/escapeHtml.ts` in `754326176`.
+3. ✅ `SanitizedHtml` branded type — added to `AiFeedbackPanel/types.ts` in `809c2a7e9`; compile-time enforcement, zero runtime cost.
 
-Deferrable to follow-up tickets (acknowledged in the PR description):
+**Already-addressed low-severity items:**
 
-4. Cancel + getStatus handler shell tests (issue #6) — at least for the two non-busboy handlers.
-5. Server-side 30K word-count gate (issue #7).
-6. `useAiFeedbackEligibility` test file (issue #8).
-7. XSS regression test for the marked path (issue #9).
-8. `BLOCKED_FORMATS` case-sensitivity normalization (issue #4).
-9. `triggerAi` double-click guard (issue #5).
+4. ✅ `BLOCKED_FORMATS` consistency — reuses shared `GOOGLE_DRIVE_FILE_FORMATS` in `809c2a7e9`.
+5. ✅ `triggerAi` double-click guard — hook short-circuit + button `disabled` in `809c2a7e9`.
+6. ✅ Server-side 30K word-count gate — uses `order.workItemSize` in `754326176`.
+7. ✅ XSS regression test for `marked` path — pins `summary` + `finding.summary` escape in `809c2a7e9`.
+
+**Remaining (deferred to follow-up tickets, both disclosed in PR description):**
+
+- ⏸ Cancel + getStatus handler shell integration tests (issue #6).
+- ⏸ `useAiFeedbackEligibility` dedicated test file (issue #8).
+
+Neither blocks merging. Good work on the careful diligence — particularly the `req.unpipe(bb); req.destroy()` belt-and-suspenders, the `escapeHtml`-vs-`sanitizeHtml` doc comment, and the correct identification that the real XSS surface in `formatAiSummaryAsHtml` is `summary`/`finding.summary` rather than `tone_notes` (which the formatter doesn't read).
+
+---
+
+## Re-review — resolution status (head `809c2a7`, 2026-05-25)
+
+Two follow-up commits landed after the initial review: `754326176` (server hardening) and `809c2a7e9` (quick wins). Verified the actual code on the PR head.
+
+| # | Issue | Status | Resolution |
+|---|---|---|---|
+| 1 | bb.on(finish)/bb.on(error) double-response race | ✅ Fixed in `754326176` | `responseAlreadySent` sentinel checked at the top of both `finish` and `error` handlers and set immediately before each `res.status(...).json(...)`. Additionally, `req.unpipe(bb); req.destroy()` in the `limit` listener so busboy stops consuming bytes and the truncated payload never reaches the provider. Belt-and-suspenders. |
+| 2 | Unescaped text blocks in `blockFormatFileToHtml` | ✅ Fixed in `754326176` | `escapeHtml(block.content)` applied to text-typed blocks; html-typed blocks left as-is (Tiptap export already HTML). `escapeHtml` promoted to `packages/shared/utils/escapeHtml.ts` with a clear comment distinguishing it from `sanitizeHtml`. Both call sites (`submit/utils.ts` + `getStatus/utils.ts`) import from there. |
+| 3 | `DraftedState` trust-contract fragility | ✅ Fixed in `809c2a7e9` | `SanitizedHtml` branded type added (`string & { readonly __brand: "SanitizedHtml" }`); `AiFeedbackDraft.summary` / `toneNotes` retyped to require it; the `as SanitizedHtml` cast lives at the sanitize site in `useAiFeedbackPanel`'s `draft` useMemo. Compile-time enforcement, zero runtime cost — matches the recommended approach. |
+| 4 | `BLOCKED_FORMATS` case-sensitivity / duplication | ✅ Fixed in `809c2a7e9` | Now uses shared `GOOGLE_DRIVE_FILE_FORMATS` from `packages/shared/config/workItemFormat.ts`. Set is explicitly typed `Set<string>`. Future GDrive formats auto-block. |
+| 5 | `triggerAi` no double-click guard | ✅ Fixed in `809c2a7e9` | Two layers: `if (submit.isLoading) return;` at the top of `triggerAi`, and a new `isSubmitting` return field on the hook wired to `GenerateFeedbackCard`'s `disabled` prop for UX-visible affordance. |
+| 6 | Cancel + getStatus handler shell tests | ⏸ Still deferred | Not addressed in this push. PR description's "Open follow-ups" section continues to list handler-shell test coverage as a follow-up ticket. Acceptable for the original scope. |
+| 7 | Server-side word-count gate | ✅ Fixed in `754326176` | New 413 gate using `order.workItemSize` (OMS-pre-computed). Runs after format/platform/org gates and before `provider.submit`, so no upstream call when the document exceeds 30K words. Mirrors the client `useAiFeedbackEligibility` check. |
+| 8 | `useAiFeedbackEligibility` test file | ⏸ Still missing | Not addressed. Low-severity in original review; worth a small follow-up but not blocking. |
+| 9 | XSS regression test for `marked` path | ✅ Fixed in `809c2a7e9` | Two new test cases in `getStatus/utils.test.ts` pinning `<script>` in `summary` and `<img onerror>` in `finding.summary` are escaped before `marked.parse` sees them. The dev correctly noted my original suggestion used `tone_notes` as the example, but `formatAiSummaryAsHtml` doesn't read `tone_notes` — the real injection surface is `summary` + `finding.summary`. Good catch. |
+
+**Score:** 7 of 9 issues fixed (all 3 medium-severity, 4 of 6 low-severity). The two unresolved items are both lower-priority test-coverage gaps already disclosed in the PR description as deferred follow-ups.
+
+### Updated summary
+
+| Aspect | Status |
+|---|---|
+| Correctness | ✅ |
+| Regression risk | ✅ Low — flagged race conditions and quality issues addressed; trust contracts now compiler-enforced |
+| Tests | ✅ Strong overall; two minor coverage gaps deferred to follow-up tickets |
+| Code quality | ✅ |
+| Mergeable state | ✅ Clean |
+| Security | ✅ Defense-in-depth XSS (escape + sanitize + branded type); server-side word-count gate; busboy 413 + race-safe response; auth fail-closed |
+
+### Updated recommendation
+
+**Approve.**
+
+Both medium-severity correctness issues (busboy race, text-block escape) and the medium-severity trust-contract concern (DraftedState) are properly addressed. The remaining deferred items (cancel/getStatus handler-shell tests, eligibility hook test) are low-severity follow-ups already disclosed in the PR description and don't block merging this stack.
+
+The two new commits demonstrate the kind of careful diligence I'd want to see on every security-adjacent PR — particularly the `req.unpipe(bb); req.destroy()` belt-and-suspenders on the busboy limit handler, the `escapeHtml` extraction with the documented distinction from `sanitizeHtml`, and the dev's correction on the XSS test surface (using `summary`/`finding.summary` rather than `tone_notes`, which isn't read by the formatter). Good work.
