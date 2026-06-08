@@ -3,6 +3,27 @@
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2296
 **Jira:** https://proofed.atlassian.net/browse/PP-1641
 **Status:** In Progress
+**Last verified against code:** 2026-06-08 (branch `feature/PP-1641-dynamic-job-return-time` @ `e9fcf817a`)
+
+---
+
+## Verification Summary (2026-06-08)
+
+| # | Issue | Severity | Verified Status | Valid / Actionable? |
+|---|---|---|---|---|
+| 1 | `mergeJobOverrides` doesn't advance anchor on rejected `maxReturnTime` override | medium | ❌ NOT FIXED | ✅ Valid — fix recommended |
+| 2 | AC 5.4 invariant `returnTime <= maxReturnTime` not asserted | low | ❌ NOT FIXED | ✅ Valid — small defensive add |
+| 3 | `WorkflowWindowInputRowProps.jobType` is dead | low | ❌ NOT FIXED | ✅ Valid — easy cleanup |
+| 4 | `useWorkflowWindowInputRow` exports unused values | low | ❌ NOT FIXED | ✅ Valid — easy cleanup |
+| 5 | `CreateOrderNewPayloadType.order.jobs` is `Record<string, any>` | low | ❌ NOT FIXED | ✅ Valid — but scope creep risk |
+| 6 | Inner loop iterates `deliveryCalculation.jobs` not `mergedDeliveryJobs` | low | ❌ NOT FIXED | ✅ Valid — one-line robustness fix |
+| 7 | No integration test for pre-assigned payload wiring | low | ❌ NOT FIXED | ✅ Valid — highest test-value gap |
+| 8 | `handleDateChange` only reports first order's buffer | low | ❌ NOT FIXED | ⚠️ Pre-existing — defer (needs design confirmation) |
+| 9 | Schema's `window` field still `Yup.number().required()` | informational | ❌ NOT FIXED | ⚠️ Acknowledged debt — no action this PR |
+
+**Priority before merge:** #1, #3, #4, #6, #7 (correctness + cleanup + critical test coverage).
+**Recommended follow-up:** #2 (defensive), #5 (type debt — surfaces existing `@ts-ignore` sites).
+**Defer / no action:** #8 (pre-existing UX, design call), #9 (tracked migration debt).
 
 ---
 
@@ -50,6 +71,7 @@ A new `mergeJobOverrides` helper bridges admin-edited deltas (the form) with the
 **[File: apps/creative-portal/api/orders/createNew/helpers/mergeJobOverrides.ts]**
 **Function/Class:** mergeJobOverrides
 **Severity:** medium
+**Verified Status:** ❌ NOT FIXED — Lines 86-96 still only advance `runningMaxReturn` when `overriddenWindow > 0`; the rejection branch falls through without advancing the anchor. **Action: fix recommended.**
 **Problem:** Inside the per-job loop, the `else if (override?.maxReturnTime)` branch only advances `runningMaxReturn` when `overriddenWindow > 0`. If the picked `maxReturnTime` equals or precedes the running anchor (overriddenWindow ≤ 0), the override is silently dropped, the job's `maxReturnWindowsMinutes` falls back to the delivery-calc default — but the running anchor is **not advanced** by that default either, because the branches are mutually exclusive (`if … else if … else if`).
 **Impact:** Downstream chain corruption. If Job 1 has a bad `maxReturnTime` override (e.g., picker UX or stale form data) and Job 2 exists, Job 2's running anchor stays at `orderStartTime` and its merged `maxReturnWindowsMinutes` is still the delivery-calc default — but the *implicit anchor* used to chain to Job 3 is wrong. Final timings will then fail the strictly-increasing check in `computeJobReturnTimings`, masking the original cause behind a different error. The existing test `ignores a maxReturnTime override that produces a non-positive window` is single-job so it doesn't catch this. Per the in-code comment "the picker bounds normally prevent this," so this is mostly a defence-in-depth gap, but it can still happen if the form ever stores absolute `maxReturnTime` (which the type still permits).
 **Fix:** When the `maxReturnTime` override is rejected, still advance `runningMaxReturn` by the delivery-calc `maxReturnWindowsMinutes` so the chain stays consistent:
@@ -85,6 +107,7 @@ Add a multi-job test that confirms downstream chaining after a rejected `maxRetu
 **[File: apps/creative-portal/api/orders/createNew/helpers/computeJobReturnTimings.ts]**
 **Function/Class:** computeJobReturnTimings / computePreAssignedReturnTime
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `computeJobReturnTimings` (lines 23-87) still has no explicit `returnTime <= maxReturnTime` check; invariant is only enforced by `computePreAssignedReturnTime`'s `min([...])`. **Action: optional defensive add.**
 **Problem:** Spec rule 5.4 (validation rule, not a derivation rule) says any supplied `returnTime` must be ≤ `maxReturnTime`. The current implementation never validates this — it relies on `computePreAssignedReturnTime` always capping via `min([projected, maxReturn])`. A future refactor that bypasses that helper (e.g., when picking up overrides from the form, or for grouped orders) could violate the invariant without any check failing. No test asserts the invariant either.
 **Impact:** Future regression risk. The OMS API will reject (per testing-note 4), but the failure surfaces as a network error to the admin instead of pre-flight validation feedback.
 **Fix:** Either (a) add a one-line invariant check inside `computeJobReturnTimings` that runs over `jobTimings` after the loop, comparing each pre-assigned job's `returnTime` against its `maxReturnTime`; or (b) add an explicit unit test for `computePreAssignedReturnTime` asserting it never returns a value > `currentMaxReturnTime` under any input. Option (a) is more defensive; the helper already accepts `returnTime` for non-assigned jobs and could grow new branches.
@@ -96,6 +119,7 @@ Add a multi-job test that confirms downstream chaining after a rejected `maxRetu
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/partials/WorkflowWindowInput/partials/WorkflowWindowInputRow/types.ts]**
 **Function/Class:** WorkflowWindowInputRowProps / useWorkflowWindowInputRow
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `types.ts` still declares `jobType: JobType` (line 5); `index.tsx:38` destructures it and forwards it to `useWorkflowWindowInputRow` (line 59), but the hook never reads it. **Action: drop the prop end-to-end.**
 **Problem:** The row component (`index.tsx:38`) and the hook signature both accept `jobType` but it is never read. The component just forwards it to the hook, and the hook only destructures `{ jobIndex, orderIndexes }`. The caller in `generateWorkflowComponents.tsx:202` passes `jobType={jobTypeName as JobType}` for no effect.
 **Impact:** Slightly misleading API surface; an unused cast (`as JobType`) is being performed at the call site. Eslint may flag the unused destructure on a stricter config.
 **Fix:** Drop `jobType` from `WorkflowWindowInputRowProps`, the component destructure, the hook signature, and the call site:
@@ -121,6 +145,7 @@ export interface WorkflowWindowInputRowProps {
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/partials/WorkflowWindowInput/partials/WorkflowWindowInputRow/hooks.ts]**
 **Function/Class:** useWorkflowWindowInputRow
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `hooks.ts` (lines 297-314) still returns `isPreAssigned`, `jobDueDateAside`, `userDueDateAside`, `leftDelta`, `rightDelta`; `index.tsx` destructure (lines 47-58) does not read any of them. **Action: drop unused returns + their backing memos.**
 **Problem:** The hook returns `isPreAssigned`, `jobDueDateAside`, `userDueDateAside`, `leftDelta`, `rightDelta`. The row component (`index.tsx`) destructures only `leftDate, maxReturnTime, maxReturnWindowsMinutes, nextMaxReturnTimeBound, orderBufferMinutes, orderDeadline, previousAnchorForMaxReturn, previousAnchorForProjected, previousMaxReturnTimeBound, returnWindowsMinutes, userDueDateSlackMinutes`. The other returns are dead.
 **Impact:** Maintenance noise — readers (and the perfectionist sort rule) have to reason about whether these are intentional. `leftDelta` / `rightDelta` are explicitly marked "kept for backwards compatibility" but nothing actually consumes them.
 **Fix:** Remove the unused returns and the memos backing them (`isPreAssigned`, `userDueDateAside`, `jobDueDateAside`, `leftDelta`, `rightDelta`). If `isPreAssigned` is anticipated for PP-1642 sidebar work, leave a comment pointing to that ticket — otherwise drop it.
@@ -132,6 +157,7 @@ export interface WorkflowWindowInputRowProps {
 **[File: apps/creative-portal/api/orders/types.ts]**
 **Function/Class:** CreateOrderNewPayloadType
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `types.ts:235-242` still declares `Record<string, any> & { maxReturnTime?…; maxReturnWindowsMinutes?…; returnWindowsMinutes?… }` with the `eslint-disable @typescript-eslint/no-explicit-any` on line 236. Also `utils.ts:549` retains the `@ts-ignore TODO` on `jobDetails?.jobTypeName === JobType.SERVICE`. **Action: replace with explicit interface; may surface follow-up type fixes — consider whether to bundle here or carve out.**
 **Problem:** The job array element is declared as `Record<string, any> & { maxReturnTime?: string | Date; maxReturnWindowsMinutes?: number; returnWindowsMinutes?: number }` with an eslint-disable for `no-explicit-any`. This is precisely the workspace pattern the user's memory warns against (feedback rule against `eslint-disable` for `no-explicit-any`).
 **Impact:** Inside `createOrderBusinessLogic`, fields like `jobDetails.status`, `jobDetails.assignedUsers[0]?.id`, `jobDetails.jobTypeName` are read without type checking — and there's already a `// @ts-ignore TODO` on line 550 (`jobDetails?.jobTypeName === JobType.SERVICE`). The contract between the form schema (`CreateOrderSchema['orders'][number]['jobs'][number]`) and this payload type is invisible to the compiler.
 **Fix:** Replace `Record<string, any>` with an explicit interface that mirrors the form schema (status, jobId, jobTypeName, assignedUsers, maxReturnTime, maxReturnWindowsMinutes, returnWindowsMinutes). Remove the eslint-disable. This will surface the existing `// @ts-ignore` sites as real type errors to fix; some may simply go away.
@@ -143,6 +169,7 @@ export interface WorkflowWindowInputRowProps {
 **[File: apps/creative-portal/api/orders/createNew/utils.ts]**
 **Function/Class:** createOrderBusinessLogic
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `utils.ts:534` still reads `for (const deliveryCalculationJob of deliveryCalculation.jobs)`. **Action: trivial one-line swap to `mergedDeliveryJobs`.**
 **Problem:** Line 534: `for (const deliveryCalculationJob of deliveryCalculation.jobs)` — but the timings on `jobTimings` were computed from `mergedDeliveryJobs`. The loop body only uses `deliveryCalculationJob.jobTypeId` to look up `currentJob` and `timing`, so this currently works because `mergeJobOverrides` preserves order and jobTypeIds. But if `mergeJobOverrides` ever filters or reorders (e.g., to drop a job that lacks a matching configuration), the indices would diverge silently.
 **Impact:** Latent fragility. A future change to `mergeJobOverrides` could break order semantics without a test failing.
 **Fix:** Iterate `mergedDeliveryJobs` instead of `deliveryCalculation.jobs`:
@@ -160,6 +187,7 @@ The body is unchanged — `mergedDeliveryJobs[N].jobTypeId` equals `deliveryCalc
 **[File: apps/creative-portal/api/orders/createNew/__tests__/supportDocuments.test.ts]**
 **Function/Class:** describe("createOrderBusinessLogic — support documents")
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `apps/creative-portal/api/orders/createNew/__tests__/` still contains only `supportDocuments.test.ts`; no `jobTimings.test.ts` (or equivalent integration test). **Action: highest-value coverage gap — add integration test for pre-assigned payload wiring.**
 **Problem:** The test fixture sets `order.jobs: []` and mocks `getDeadline → { jobs: [] }`, so `mergeJobOverrides` is invoked with empty arrays and exercises none of its branches. The other newly-added helpers (`computeJobReturnTimings`, `computePreAssignedReturnTime`, `JobTimingValidationError`) are mocked at the module boundary. None of these tests exercise the pre-assigned path or verify that `proofedUserId` and `returnTime` ride together in the payload.
 **Impact:** Spec acceptance criteria for pre-assigned jobs (testing notes 2 and 3 in the Jira ticket — "all unassigned", "one pre-assigned at first position", "multiple pre-assigned in sequence") are NOT covered by integration tests against `createOrderBusinessLogic`. Unit tests for the helpers cover the math, but the wiring (`isPreAssigned` detection, `previousJobReturnTime/MaxReturnTime` flip-flop, `returnTime` spread into payload) is untested.
 **Fix:** Add an integration test file (e.g., `__tests__/jobTimings.test.ts`) that mocks `addJob` to capture the payload, then asserts:
@@ -177,6 +205,7 @@ This is the highest-value coverage gap given the spec is largely about who-gets-
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 **Function/Class:** useDeadlineManagement / handleDateChange
 **Severity:** low
+**Verified Status:** ❌ NOT FIXED — `useDeadlineManagement.ts:251` still reads `setBuffer(Math.max(0, updatedBuffers[0]))`. **Action: pre-existing behaviour carried forward — DEFER unless design wants the tightest-buffer treatment.**
 **Problem:** Line 251: `setBuffer(Math.max(0, updatedBuffers[0]))` — takes only `updatedBuffers[0]`. The validation block above (`isInsufficientBuffer`) correctly checks all orders, so the *error gate* is right, but the visible Buffer pill only reflects the first order. The pre-PP-1641 code had the same behavior; PP-1641 preserves it. Flagging as a minor pre-existing UX inconsistency that the rewrite carried forward.
 **Impact:** If two selected orders have different buffers, the admin sees the first one's value even though both are tracked internally.
 **Fix:** If the design intent is "show the tightest buffer," use `Math.min(...updatedBuffers.map((b) => Math.max(0, b)))`. Confirm with design — could be left as is.
@@ -188,6 +217,7 @@ This is the highest-value coverage gap given the spec is largely about who-gets-
 **[File: apps/creative-portal/components/organisms/NewOrderForm/schemas.ts]**
 **Function/Class:** JOBS_SCHEMA
 **Severity:** informational
+**Verified Status:** ❌ NOT FIXED — `schemas.ts:21` still has `window: Yup.number().required()`. **Action: NO ACTION THIS PR — tracked migration debt; address in PP-1642 / follow-up.**
 **Problem:** Line 21: `window: Yup.number().required()` is marked legacy by the PR's own comment ("Remove `window` once all consumers have migrated"). It is still required, while `returnWindowsMinutes` (the new replacement) is `optional()`. The provider effect that writes `window` (lines 491-536) and the new effect that writes `returnWindowsMinutes` (lines 543-608) are both gated independently — there's no transactional guarantee that both fields land before schema validation runs.
 **Impact:** Mostly OK because the same `useEffect` cascade writes both — but if a future refactor drops the legacy `window` writer first, schema validation will fail until callers stop expecting `window`. Acknowledged technical debt, not a blocker.
 **Fix:** No action this PR; track in PP-1642 / migration follow-up.
