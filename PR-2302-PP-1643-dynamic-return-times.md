@@ -1,9 +1,32 @@
-# PR Review: feature/PP-1643: Dynamic return times
+# PR Review: feature/PP-1642-1643-1644-1863: Dynamic return times
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2302
 **Jira:** https://proofed.atlassian.net/browse/PP-1643
-**Status:** Code Review
-**Scope:** 64 files changed, +2,966 / −528
+**Status:** Code Review — **Re-checked 2026-06-09** against commit `6c8ba88e` (latest on `origin/feature/PP-1643-dynamic-return-times`)
+**Scope:** 118 files changed, +9,552 / −1,115 (grew from 64 files at first pass — title now bundles PP-1642 / PP-1644 / PP-1863)
+
+---
+
+## Recheck Summary (2026-06-09)
+
+**4 of 7 issues addressed (3 high/medium, 1 low). 3 low-severity issues remain (5–7); all were flagged as "defer" in the original review.** No new review-blocking concerns surfaced in the recheck.
+
+| Issue | Original severity | Status after recheck |
+|---|---|---|
+| 1. `updateReturnTime` sequence guard — Z-suffix doubled | **high** | ✅ **Fixed** — `parseUtcDateString` now used for both `previousReference` and updated job values (`useUpdateJobReturn.ts:115-122`). Inline comment documents the original regression vector. |
+| 2. Picker open date disagrees with tray pill (jobs index > 0) | medium | ✅ **Fixed** — `initialDeadlineDate` now anchors on `previousJobMaxReturnTime` via `parseUtcDateString` in `JobCard.tsx`, matching the tray's projection. |
+| 3. `addNewJobs` schema requires `returnTime` while type allows undefined | medium | ✅ **Fixed** — schema is now `Yup.string().optional()`, with a PP-1863 comment ("computed server-side and omitted for the unassigned inserted job per OMS §24.5"). |
+| 4. `jobItemToJobTableItem` — unnecessary optional chain and dead fallback | low | ✅ **Fixed** — collapsed to `getEffectiveDeadline(parseJobTiming(jobItem)).toISOString()` with a clarifying comment. |
+| 5. `OrderStatusCardInfo/template.tsx` — infinite spinner for unassigned current job | low | ⚠️ **Not fixed** — `DeadlineRow` was refactored into its own partial with a `showLoadingFallback` flag, but the User DD row in `template.tsx:148-152` still passes `showLoadingFallback` unconditionally, and the hook still feeds `returnTime = currentJobData?.returnTime` (undefined for unassigned). The fix needs `isJobLoading`-gated fallback, not always-true. |
+| 6. `runGuards` predicate evaluates eagerly | low | ⚠️ **Not fixed** — `predicate: boolean` signature unchanged. Acceptable per original deferral. |
+| 7. Shift-mode cascade has no transactional rollback | low | ⚠️ **Not fixed** — `Promise.all([mutatePartialJob(current), ...cascadeUpdates.map(mutatePartialJob)])` unchanged in `useUpdateJobReturn.ts:289-295`. Acceptable per original deferral; OMS-side bulk endpoint remains the cleaner long-term fix. |
+| Test gap: `areDatesInSequence × updateJobReturnTimes` round-trip | — | ⚠️ **Not added** — `OrderJobs/utils.test.ts` exercises `updateJobReturnTimes` and `getDownstreamJobConstraint` separately, but no integration test feeds one into the other (which would have caught Issue 1). Worth adding while the fix is fresh. |
+
+**Recommendation update:** With Issues 1–4 fixed, the PR is now in **approve-with-comments** territory. Issue 5 is the only remaining behavior gap (low-severity, likely pre-existing per the original write-up). Issues 6 and 7 can ship to a follow-up; Issue 7 belongs with the OMS bulk-endpoint follow-up the PR description already calls out. Add the regression test for Issue 1 before merge.
+
+---
+
+## Original Review (pre-recheck)
 
 ---
 
