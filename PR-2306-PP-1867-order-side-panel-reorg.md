@@ -10,109 +10,237 @@
 
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
-| 1. Job cards moved directly below the customer information section | `Styled.JobsContentWrapper` moved up in `OrderManagment/index.tsx`, now sits between `GeneralOrderInfo` and the `DetailedOrderInfo`/Brief block | ✅ Addressed |
-| 2. Job cards no longer at the bottom of the panel | The bottom `JobsContentWrapper` was removed; jobs now render mid-panel | ✅ Addressed |
-| 3. Order ID + external reference replace content type/industry in the title area | `OrderTitleInfo` now gets `title={externalReference}` and `subtitle={order.id}` | ✅ Addressed |
-| 4. External reference single line, ellipsis-truncated by default | `StyledHeadingTitle` applies `white-space: nowrap; overflow: hidden; text-overflow: ellipsis` while not expanded | ✅ Addressed |
-| 5. Hover turns the full text green (interactive cue) | `StyledHeadingTitle` `&:hover { color: green1 }` gated on `isInteractive` | ✅ Addressed |
-| 6. Clicking expands to full text | `OrderTitleInfo` `toggleExpanded` → `isExpanded` → `white-space: normal; word-break: break-word` | ✅ Addressed |
-| 7. Clicking again collapses | Same boolean toggle | ✅ Addressed |
-| 8. Content type + industry as first two Brief items | `Brief` now receives `workItemType` (renders "Type:") and `workItemSubject` (renders "Industry:"), which are already the first two list items | ✅ Addressed |
-| 9. Created by / Created for shown in the top info segment | Added as `DetailsList` items in `GeneralOrderInfo` (DetailsList is `display:flex; flex-wrap:wrap` with column items → renders the horizontal "people row" matching Figma) | ✅ Addressed |
-| 10. Hide Created by / Created for when they have no value | `hidden: !createdById` / `hidden: !createdForId` | ✅ Addressed |
-| 11. Remove Created by / Created for from the third segment | Removed from `DetailedOrderInfo` (logic + queries + imports) | ✅ Addressed |
+| 1–2. Job cards directly below customer info, not at panel bottom | `Styled.JobsContentWrapper` block moved from the end of the panel to immediately after `GeneralOrderInfo` in `OrderManagment/index.tsx` | ✅ Addressed |
+| 3. Order ID + external reference replace content type/industry in title area | `OrderTitleInfo` now gets `title` = cleaned `externalReference`, `subtitle` = `order.id` | ✅ Addressed (see Issue 3 for the missing-reference edge case) |
+| 4. External reference single-line, ellipsis-truncated | `StyledHeadingTitle` keeps `nowrap/hidden/ellipsis` when collapsed | ✅ Addressed |
+| 5. Hover turns text green | `&:hover { color: theme.colors.green1 }` when `isInteractive` | ✅ Addressed |
+| 6. Click expands to full text | `isExpanded` toggles `white-space: normal; word-break: break-word` | ✅ Addressed (mouse only — see Issue 2) |
+| 7. Click again collapses | Same toggle; `key={order.id}` resets state across order navigation | ✅ Addressed |
+| 8. Content type + industry first two Brief items | `workItemType` / `workItemSubject` now passed to `Brief`, which already renders them as "Type:" / "Industry:" first | ✅ Addressed |
+| 9. Created by / Created for in top info segment | Rendered as `DetailsList` items in `GeneralOrderInfo`, query logic relocated verbatim | ✅ Addressed |
+| 10. Hidden when no value | `hidden: !createdById` / `hidden: !createdForId` | ✅ Addressed |
+| 11. Removed from third segment | Both rows + their queries removed from `DetailedOrderInfo` | ✅ Addressed |
 
-**Beyond Jira scope (reasonable supporting changes):**
-- Reorder `DetailedOrderInfo` fields (Buffer moved up; Services / Workflow / Batch Name moved down) — matches the Figma third-segment order.
-- `JobCard` drops `mt="3rem"` and passes `withSpacing={false}` to `WorkflowBox` (pre-existing prop) — supports the new vertical rhythm.
-- `OrderSidebarHeader` bottom margin `4rem → 2rem` — supports tighter spacing.
+**Beyond ticket scope:**
 
-All in-scope for a "spring clean / layout reorganisation" story.
+- "Order ID" and "External Reference" rows were **deleted entirely from `GeneralOrderInfo`** — but `JobManagement` also renders that component (see Issue 1).
+- `DetailedOrderInfo` field reorder (Buffer up; Services/Workflow/Batch Name down) and `OrderSidebarHeader` bottom margin 4rem → 2rem — presented as Figma alignment; plausible, but not in the written requirements.
+- Prettier-3 formatting churn across 9 unrelated files (aiReviewFeedback API/tests, ChargeTable, NewOrderForm, customer-portal `createOrderAndJobs`, shared `DotsLoader`, `richTextEditorContext`). Consistent with the repo's prettier 3.5.3 toolchain, so benign — but it inflates a 21-file diff for a UI reorg and pollutes `git blame`.
+
+**Jira flag:** the ticket's Testing Notes currently show items 9–11 marked ❌ (created by/for hidden when empty, removed from third segment, type/industry out of title area). The PR head *does* implement all three — the ❌ marks likely predate the latest commits. QA should re-verify and the ticket checklist updated before merge.
 
 ---
 
 ## Architecture Analysis
 
-The approach is a clean relocation, not a rewrite:
+The approach is sound and low-risk in shape: the layout move is a relocation of existing JSX blocks rather than a rewrite, the created-by/for query + render logic is moved verbatim from `DetailedOrderInfo` to `GeneralOrderInfo`, and the interactive-title behavior is added to the shared `Heading` molecule via three optional props that default to prior behavior (`isInteractive` undefined → identical ellipsis CSS), so the other `Heading` consumers (`JobManagement`, `DocumentCard`, etc.) are unaffected. Expansion state lives in `OrderTitleInfo` and is reset across orders via `key={order.id}` — a clean derivation-over-effect choice.
 
-- The Created-by / Created-for query + render logic (`useUserPersonalInfoQuery`, `useOrganizationMemberByIdQuery`, the `isProofedUser` / `isClientApi` branching, `AssigneeView` / `IconLogoApi`) is moved **verbatim** from `DetailedOrderInfo` (third segment) into `GeneralOrderInfo` (top segment). No new behaviour was introduced, which keeps regression risk low.
-- The title becomes interactive by **extending the shared `Heading` molecule** with three optional props (`isInteractive`, `isExpanded`, `onTitleClick`) rather than forking it — consistent with the repo's reuse-first convention. The expand/collapse state is owned by `OrderTitleInfo` via a `hooks`-free `useState`/`useCallback` (this is a small partial, so inline state is acceptable).
-- The top "people row" reuses `DetailsList` (horizontal flex-wrap of column cells), so Customer / Created by / Created for naturally lay out side-by-side as in the Figma. The third segment correctly stays on `DescriptionList` (vertical rows).
-- `Brief` already supported `workItemType` / `workItemSubject`; the PR just wires them through, so requirement 8 is a one-line change with no component edit.
-
-I verified the design against the Figma node (77531-35944): title (Order ID subtitle + truncated external reference), expanded title state, horizontal people row, Brief "Type/Industry" first, and the reordered third segment all match.
-
-Regression check on the shared `Heading` molecule: the other five consumers (`OrderInfo`, `HTMLContentPill`, `JobTable/consts`, `PayoutsTable`, `DocumentsTable`) don't pass the new props, so `isInteractive`/`isExpanded` are `undefined` → the title falls back to the original nowrap/ellipsis styling and `onClick` is `undefined`. No behavioural change for them. `GeneralOrderInfo`'s other consumer (`JobManagement`) doesn't pass `createdById`/`createdForId`/`creator`, so the new rows stay hidden and both queries stay `enabled: false`. Mergeable state is reported `clean`.
+The one structural miss is that `GeneralOrderInfo` is shared between the order sidebar and the job sidebar, and the row removals were only reconciled against the order sidebar.
 
 ---
 
 ## Issues Found
 
-### 1. Title expand state leaks across order navigation
+### 1. JobManagement sidebar silently loses its Order ID row
 
-**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderTitleInfo.tsx]**
-**Function/Class:** OrderTitleInfo
-**Severity:** low
-**Problem:** `isExpanded` is local component state. When the side panel switches to a different order without unmounting `OrderTitleInfo` (e.g. via `onNavigateToGroupOrder` group navigation), the component instance is reused and `isExpanded` persists. A user who expands order A's long external reference and then navigates to order B will see B's title rendered expanded even though they never clicked it.
-**Impact:** Minor visual inconsistency — the next order's title shows un-truncated when it should default to the collapsed/ellipsis state. Not breaking; data is correct.
-**Fix:** Reset the expanded state when the title (order) changes, or key the component by order id. Either:
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/GeneralOrderInfo/index.tsx]**
+
+**Function/Class:** GeneralOrderInfo
+
+**Severity:** high
+
+**Problem:** The unconditional "Order ID" item (old key `"2"`) was deleted from `GeneralOrderInfo`'s `DetailsList`. In the order sidebar that's fine — the Order ID moved to the title subtitle. But `JobManagement/index.tsx:173` also renders `GeneralOrderInfo` (passing `orderId={job.orderId.toString()}`), and the job sidebar's title area was **not** changed — so the job panel now shows Customer / PO ID / Customer Reference with no Order ID anywhere.
+
+**Impact:** Regression outside PP-1867's scope (the ticket covers the *order* side panel only). Creatives/admins working from the job sidebar lose the order identifier they previously had. The `orderId` prop is now only used internally for the group-dropdown active check, so TypeScript catches nothing.
+
+**Fix:** Keep the row but let the order sidebar opt out:
 
 ```tsx
-// Option A — reset on title change
-useEffect(() => setIsExpanded(false), [title]);
+// types.ts
+export interface GeneralOrderInfoProps {
+  orderId: string;
+  showOrderId?: boolean; // default true
+  ...
+}
+
+// GeneralOrderInfo items array
+{
+  key: "2",
+  title: "Order ID",
+  description: `${orderId}`,
+  hidden: !showOrderId
+},
 ```
+
+Then pass `showOrderId={false}` from `OrderManagment/index.tsx` (where the ID now lives in the title) and leave `JobManagement` untouched.
+
+### 2. Expandable title is mouse-only — no keyboard or screen-reader access
+
+**[File: apps/creative-portal/components/molecules/Heading/index.tsx]**
+
+**Function/Class:** Heading
+
+**Severity:** medium
+
+**Problem:** The interactive title is an `h2`/`h3` (`StyledHeadingTitle as={titleTag}`) with a bare `onClick`. There's no `tabIndex`, no Enter/Space key handling, no `role="button"`, and no `aria-expanded`. (`eslint-plugin-jsx-a11y` can't flag it because the element type is hidden behind the styled component.)
+
+**Impact:** Keyboard users cannot expand a truncated external reference at all; screen readers announce a plain heading with no hint that it's interactive or what state it's in. Jira requirements 5–7 describe click interaction, but shipping it click-only is an accessibility regression for a repo that lints with a11y plugins.
+
+**Fix:** Render a real button inside the heading when interactive (cleanest), or at minimum add the interactive affordances:
 
 ```tsx
-// Option B — remount per order at the call site (OrderManagment/index.tsx)
-<OrderTitleInfo key={order.id} ... />
+<StyledHeadingTitle
+  as={titleTag}
+  onClick={isInteractive ? onTitleClick : undefined}
+  onKeyDown={
+    isInteractive
+      ? (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onTitleClick?.();
+          }
+        }
+      : undefined
+  }
+  role={isInteractive ? "button" : undefined}
+  tabIndex={isInteractive ? 0 : undefined}
+  aria-expanded={isInteractive ? isExpanded : undefined}
+  {...{ isSmall, title, isInteractive, isExpanded }}
+>
 ```
 
-### 2. Empty heading title for orders without an external reference
+### 3. Blank title when an order has no external reference
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/index.tsx]**
-**Function/Class:** OrderManagement (OrderTitleInfo usage)
-**Severity:** low
-**Problem:** `title={order.externalReference ? removeUniqueKeyFromExternalReference(order.externalReference) : ""}`. When an order has no external reference, the large title line renders empty, leaving only the small Order-ID subtitle. Previously the title always showed the content type (`workItemSubject`), so the heading was never blank.
-**Impact:** Orders without an external reference get a visually empty heading area. May be acceptable if all orders in practice carry an external reference, but worth confirming.
-**Fix:** Provide a fallback for the empty case, e.g. fall back to the work-item subject or the order id string, and keep `isTitleExpandable` only when there is a real external reference (already correct):
+
+**Function/Class:** OrderManagement
+
+**Severity:** medium
+
+**Problem:** `title` falls back to `""` when `order.externalReference` is falsy. Previously the title was always `order.workItemSubject`. Orders without an external reference (manually created orders commonly lack one) now render an empty `h2` next to the document icon, with only the Order ID subtitle above it.
+
+**Impact:** The title area looks broken/empty for a real class of orders. Neither the ticket nor the Figma states list a "no external reference" fallback, so this is an unhandled state rather than a designed one.
+
+**Fix:** Confirm the intended fallback with design; a reasonable default is showing the Order ID as the title when no reference exists (and dropping the duplicate subtitle), e.g.:
 
 ```tsx
-title={
-  order.externalReference
-    ? removeUniqueKeyFromExternalReference(order.externalReference)
-    : order.workItemSubject ?? order.id.toString()
-}
+const cleanedReference = order.externalReference
+  ? removeUniqueKeyFromExternalReference(order.externalReference)
+  : "";
+
+<OrderTitleInfo
+  key={order.id}
+  title={cleanedReference || `Order ${order.id}`}
+  ...
+/>
 ```
 
-### 3. PR description does not match the final implementation
+### 4. Double separator when an order has no jobs
 
-**[File: PR description]**
-**Function/Class:** —
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/index.tsx]**
+
+**Function/Class:** OrderManagement
+
 **Severity:** low
-**Problem:** The summary states `useCreatedByForRowItems now returns a named { createdBy, createdFor } object (was DetailsListItem[]), with its types extracted to a new types.ts` and "horizontal people row layout **instead of as `DetailsList` rows**". None of this is in the diff — there is no `useCreatedByForRowItems` hook in the codebase, and `GeneralOrderInfo` does use `DetailsList`. The description appears to describe an earlier abandoned approach.
-**Impact:** Misleads reviewers about what changed. The actual implementation is fine; only the narrative is stale.
-**Fix:** Update the PR summary to describe the merged approach (Created by/for moved into `GeneralOrderInfo` as `DetailsList` items; no new hook).
 
-### 4. Jira testing-notes items 9–11 still marked ❌
+**Problem:** The first `Styled.Main` ends with `<Separator />`, then comes the jobs block, then the second `Styled.Main` opens with another `<Separator />`. When `jobs` is empty the jobs block renders nothing, leaving two consecutive separators (plus an empty negative-margin wrapper) between `GeneralOrderInfo` and `DetailedOrderInfo`.
 
-**[File: Jira PP-1867 testing notes]**
-**Function/Class:** —
+**Impact:** Doubled divider line / uneven spacing for jobless orders (e.g. just-created or canceled-early orders).
+
+**Fix:** Gate the jobs wrapper and the second separator on `!!jobs?.length`:
+
+```tsx
+{!!jobs?.length && (
+  <Styled.JobsContentWrapper>
+    <Styled.JobsContent ...>
+      <OrderJobs {...{ payPerWordUnit, chargePerWordUnit }} />
+    </Styled.JobsContent>
+  </Styled.JobsContentWrapper>
+)}
+<Styled.Main>
+  {!!jobs?.length && <Separator />}
+  ...
+```
+
+### 5. Created by / Created for loading state was dropped in the move
+
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/GeneralOrderInfo/index.tsx]**
+
+**Function/Class:** GeneralOrderInfo
+
 **Severity:** low
-**Problem:** The ticket's testing checklist still shows items 9 (hide Created by/for when empty), 10 (removed from third segment) and 11 (type/industry removed from title) as ❌. The code does address all three (`hidden` flags, removal from `DetailedOrderInfo`, new title content).
-**Impact:** QA status is out of sync with the implementation.
-**Fix:** Ask QA to re-verify and tick 9–11; no code change required.
+
+**Problem:** `DetailedOrderInfo` destructured `isFetching` from both queries and passed `isLoading={isLoadingUserDetails}` to the "Created for" `AssigneeView`. The relocated code only destructures `data`, and `AssigneeView` gets no `isLoading` prop.
+
+**Impact:** While the personal-info / organization-member queries are in flight, the rows render an empty/blank assignee instead of the loading skeleton — a small UX regression versus the third-segment original, and contrary to the PR's "relocated verbatim" description.
+
+**Fix:** Restore the fetching flags:
+
+```tsx
+const { data: userDetails, isFetching: isFetchingUserDetails } =
+  useUserPersonalInfoQuery(createdById ?? 0, { ... });
+
+const {
+  data: createdForDetails,
+  isFetching: isFetchingCreatedForDetails
+} = useOrganizationMemberByIdQuery(createdForId ?? createdById ?? 0, { ... });
+
+<AssigneeView
+  organizationMemberId={createdForId}
+  userDetails={createdForDetails}
+  isLoading={isFetchingUserDetails || isFetchingCreatedForDetails}
+/>
+```
+
+### 6. Dead prop `isProofedUser` left on DetailedOrderInfoProps
+
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/types.ts]**
+
+**Function/Class:** DetailedOrderInfoProps
+
+**Severity:** low
+
+**Problem:** `createdById`, `createdForId`, and `creator` were removed from the interface, but `isProofedUser?: boolean` — which only existed to support the removed Created by/for rendering — was left behind. Nothing reads or passes it.
+
+**Impact:** Dead API surface; misleads the next reader into thinking `DetailedOrderInfo` still has creator-aware behavior.
+
+**Fix:** Delete `isProofedUser?: boolean;` from `DetailedOrderInfoProps`.
+
+### 7. New local state added inline instead of a hooks file
+
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderTitleInfo.tsx]**
+
+**Function/Class:** OrderTitleInfo
+
+**Severity:** low
+
+**Problem:** `useState`/`useCallback` were added directly into the component body. CLAUDE.md's convention is that non-trivial component state lives in a sibling `hooks.ts` exporting `useOrderTitleInfo`, with the component file staying UI-only. (The partial is a legacy flat file, so full folderization is arguably out of scope — but the new state could still follow the hook convention.)
+
+**Impact:** Convention drift in a codebase that explicitly documents the pattern.
+
+**Fix:** Extract a `useOrderTitleInfo` hook (in a sibling file or, if folderizing, `OrderTitleInfo/hooks.ts`) returning `{ isExpanded, toggleExpanded }`.
+
+---
+
+## Validation Checks
+
+| Check | Result | Notes |
+|---|---|---|
+| `npx turbo run test` | ⏭️ | Skipped — user opted out |
+| `npx turbo run typecheck` | ⏭️ | Skipped — user opted out |
+| `npx turbo run lint` | ⏭️ | Skipped — user opted out |
+| `npx turbo run build` | ⏭️ | Skipped — user opted out |
 
 ---
 
 ## Tests
 
-- ✅ `OrderTitleInfo.test.tsx` (new): covers default non-interactive title, `isTitleExpandable` flips `isInteractive`, click toggles `isExpanded` both ways, and no toggle when non-interactive. Good coverage of requirements 4–7's state logic.
-- ✅ `GeneralOrderInfo.test.tsx` (extended): covers Created by present (req 9), Created for present, both hidden when absent (req 10), and the Client-API icon fallback. DetailsList is mocked to emit `detail-<title>` test ids, so the assertions are self-consistent.
-- ⚠️ No unit test for the Brief content-type/industry wiring (req 8) or job-card repositioning (req 1) — both are integration-level / one-line prop wiring, so this is acceptable but worth a manual-test note.
-- ✅ The styling change to the shared `Heading` is CSS-only; the interactive behaviour is exercised through `OrderTitleInfo.test.tsx`.
-- ℹ️ Tests not run locally for this review (the PR branch is not checked out; the working tree holds unrelated PP-1861 changes). PR description reports the GeneralOrderInfo + OrderTitleInfo suites and typecheck/eslint as passing; the test structure is sound.
-
-**Manual test plan to confirm:** open an order with a long external reference → title truncates with ellipsis; hover → turns green; click → expands; click again → collapses; navigate to another order in the group → title should default back to collapsed (see Issue 1); verify Brief shows Type then Industry first; verify Created by/for appear in the top row only when present; verify an order with no external reference renders acceptably (see Issue 2).
+- ✅ New `OrderTitleInfo.test.tsx` (4 tests): default non-interactive render, interactive flag, expand/collapse toggle, no-toggle when non-interactive.
+- ✅ `GeneralOrderInfo.test.tsx` extended (4 tests): Created by row, Created for row, both hidden when IDs absent, Client API icon fallback — covers Jira requirements 9–10 directly.
+- ⚠️ `OrderTitleInfo.test.tsx` mocks `Heading` entirely, so the real `Heading` interactive wiring (`onClick` gating, prop forwarding, expanded/collapsed CSS switch) has no test. A small `Heading` test exercising `isInteractive`/`isExpanded` would close the gap.
+- ❌ No test would have caught Issue 1 — nothing asserts the Order ID row for the `JobManagement` consumer (and no longer can, since the row is gone).
+- ⏭️ Full validation suite skipped — user opted out. PR description reports scoped `test`/`typecheck`/`eslint` passes by the author; not independently verified.
+- Manual test plan: PR includes before/after screenshots; Jira Testing Notes items 9–11 are currently marked ❌ and need re-verification by QA against the latest commits.
 
 ---
 
@@ -120,21 +248,23 @@ title={
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Matches all 11 requirements and the Figma design |
-| Regression risk | ✅ Low — shared `Heading` props are optional/back-compatible; `GeneralOrderInfo`'s other consumer unaffected; queries gated |
-| Tests | ⚠️ Good unit coverage for the new logic; integration-level wiring (Brief/job placement) untested |
-| Code quality | ✅ Clean relocation, reuses `DetailsList` / `AssigneeView`, extends rather than forks `Heading` |
-| Mergeable state | ✅ Clean |
+| Correctness | ⚠️ Jira requirements met for the order panel, but a cross-consumer regression (Issue 1) and an unhandled empty-reference state (Issue 3) |
+| Regression risk | ⚠️ Medium — shared `GeneralOrderInfo` change leaks into the job sidebar; `Heading`/`Brief` changes are safely back-compatible |
+| Tests | ⚠️ Good coverage of new behavior at the partial level; real `Heading` wiring untested; suite not run |
+| Code quality | ✅ Clean relocation-style changes, optional back-compat props, state reset via `key`; minor convention drift and dead prop |
+| Validation suite | ⏭️ Skipped — user opted out; re-run required before merge |
+| Mergeable state | ⚠️ GitHub reports clean, but validation was not run locally — cannot confirm per CLAUDE.md's zero-failure bar |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions**
+**Request changes**
 
-1. (Optional, low) Reset `isExpanded` when the order changes so the title doesn't stay expanded across group navigation (Issue 1).
-2. (Optional, low) Add a fallback title for orders with no external reference to avoid an empty heading (Issue 2).
-3. Update the PR description to match the merged implementation (Issue 3).
-4. Have QA re-verify and tick testing-notes items 9–11 (Issue 4).
-
-None of these block merge; they are polish items. The core reorganisation is correct, well-scoped, and design-accurate.
+1. **Restore an Order ID row for the JobManagement sidebar** (Issue 1) — add a `showOrderId` opt-out prop (or equivalent) so the job panel doesn't lose the identifier.
+2. **Decide and implement the no-external-reference title fallback** (Issue 3) — confirm with design; blank `h2` is not an acceptable state.
+3. **Add keyboard/ARIA support to the interactive title** (Issue 2) — `role="button"`, `tabIndex`, Enter/Space handling, `aria-expanded`.
+4. Restore the Created by/for loading skeleton (Issue 5), gate the jobs-block separators for jobless orders (Issue 4), and drop the dead `isProofedUser` prop (Issue 6).
+5. Re-run QA on Jira Testing Notes items 9–11 (currently ❌ on the ticket despite being implemented at the PR head) and update the ticket.
+6. **Run the full validation suite** (`npx turbo run test / typecheck / lint / build`) before merging — it was skipped for this review, and CLAUDE.md treats any failure as a hard blocker.
+7. Optional: split the 9 files of Prettier-3 reformatting into a separate chore commit/PR to keep the feature diff reviewable.
