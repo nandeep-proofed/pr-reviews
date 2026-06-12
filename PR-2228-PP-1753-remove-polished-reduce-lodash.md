@@ -127,7 +127,7 @@ it("returns true for a function input (functions never reach the deep-iteration 
 
 The function-input path falls through `isEmpty()` to its `return true` (functions are `typeof "function"`, not handled by the string/array/Map/Set/object branches), so `isDeepEmpty` short-circuits at the first `isEmpty(value)` check. Test passes; 21/21 tests in this file green.
 
-### 5. Out-of-scope style-only changes ride in on the refactor ✅ Resolved
+### 5. Out-of-scope style-only changes ride in on the refactor 🚫 Not actually an issue
 
 **[File: `apps/creative-portal/components/molecules/tables/TableWithFilters/tableColumns.tsx`, `apps/creative-portal/api/jobs/[jobId]/patchJob.test.ts`, plus 3 sibling test files]**
 
@@ -135,22 +135,18 @@ The function-input path falls through `isEmpty()` to its `return true` (function
 
 **Severity:** low
 
-**Problem:** A handful of hunks in this PR had nothing to do with polished/lodash:
+**Problem:** A handful of hunks in this PR have nothing obvious to do with polished/lodash:
 
 - `tableColumns.tsx:277` — `(department ?? "")` → `department ?? ""` (removes unnecessary parens).
 - `patchJob.test.ts:75` and 3 sibling test files — `}) as Job;` → `} as Job);` (paren rearrangement around type assertion).
 
 Both are semantically identical; no functional impact.
 
-**Impact:** None functionally. Slightly muddies the PR's blast radius and makes the "this is a pure mechanical refactor" framing less true — a reviewer scanning the diff has to mentally classify these hunks. Future archaeology (`git blame`) will land on `PP-1753` for unrelated changes.
+**Impact:** None.
 
-**Fix applied:** Reverted all 5 files to develop's content via `git checkout develop -- <file>`. Confirmed each file's only PR-side diff was the paren-style hunk, so reverting drops only the noise. Files restored:
+**Investigation result:** Tried to revert all 5 files to develop's content. The husky/lint-staged pre-commit hook re-applied the PR's style on commit, and `npx prettier --check` on the PR's version returns "All matched files use Prettier code style!" — meaning the PR's style is what current Prettier on this branch *requires*. develop's content is stale per the current Prettier config.
 
-- `apps/creative-portal/components/molecules/tables/TableWithFilters/tableColumns.tsx`
-- `apps/creative-portal/api/jobs/[jobId]/patchJob.test.ts`
-- `apps/creative-portal/api/mixtures/orders/getBulkActionsData/getBulkActionsData.test.ts`
-- `apps/creative-portal/api/orders/utils.test.ts`
-- `apps/creative-portal/api/utils/jobs/mergeJobPutBody.test.ts`
+So these aren't drive-by edits; they're the formatter catching up to current rules. The "out-of-scope" framing in the original review was incorrect. No action needed — the hunks should stay.
 
 ### 6. Pre-existing lint failures across `@proofed/wysiwyg-editor`, `@proofed/customer-portal`, and `@proofed/shared` ⏭️ Skipped — separate ticket
 
@@ -235,7 +231,7 @@ Caveats on the run:
 2. ~~**(Should-fix)** Edit the PR description to remove the "Consolidated CSS-in-JS — migrated 1 styled-components outlier" bullet; the migration was reverted in commit `94af7199a` and no production consolidation lands in this PR.~~ ✅ **Done** — PR description updated via GitHub API on 2026-06-12.
 3. ~~**(Should-fix)** Migrate the 3 lingering `lodash/uniqBy`, `lodash/chunk`, `lodash/omit` imports to `@proofed/shared/utils/lodashReplacements` for consistency (files listed in Issue #2). This keeps the bundle from carrying two parallel implementations of the same function.~~ ✅ **Done** — all 3 files migrated; typecheck + 32/32 tests + eslint clean on the changes.
 4. ~~**(Nice-to-have)** Add a JSDoc to `rgba()` documenting the supported input formats (`#xxx`, `#xxxxxx`, `rgb(...)`, `rgba(...)`) since the narrower domain is the only meaningful behavior delta vs polished.~~ ✅ **Done** — JSDoc added on `rgba()` in `packages/shared/utils/rgba.ts`.
-5. ~~**(Nice-to-have)** Pull the two out-of-scope style-only hunks (`tableColumns.tsx` paren tweak, 4 test files' `} as X)` paren rearrangement) into a separate commit or revert them, to keep this PR's blast radius purely mechanical.~~ ✅ **Done** — all 5 unrelated style hunks reverted to develop's content.
+5. ~~**(Nice-to-have)** Pull the two out-of-scope style-only hunks (`tableColumns.tsx` paren tweak, 4 test files' `} as X)` paren rearrangement) into a separate commit or revert them, to keep this PR's blast radius purely mechanical.~~ 🚫 **Not actually an issue** — the style is what current Prettier requires (verified via `prettier --check`); develop's content is stale. The hunks are formatter alignment, not drive-by refactoring.
 6. ~~**(Nice-to-have)** Add `.next/**` to the creative-portal Vitest `exclude` list as a separate housekeeping ticket so `turbo run test` stops tripping on `.next/standalone/` artifacts.~~ ✅ **Done** — `exclude: ["**/node_modules/**", "**/.next/**", "**/dist/**"]` added to `apps/creative-portal/vitest.config.ts`.
 
 Static review found no correctness bugs in the new utilities or in any migrated call site. The refactor is mechanically sound; the only remaining open item is the pre-existing lint gate, which is unrelated to PP-1753's scope and belongs in a develop-side cleanup PR.
