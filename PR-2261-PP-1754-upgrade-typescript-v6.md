@@ -401,6 +401,13 @@ All non-stale Side-Effects items (1, 3, 6, 7, 8, 9, 10) are resolved. Item 11 (`
 > ~~Verify `wrapApiHandlerWithSentry` in Sentry v10~~ and ~~Clean up Sentry config (deprecated options + stale mock)~~ — **[STALE]** Sentry 7→10 upgrade was reverted (commits `05c364a1a`, `7e5cd7c63`); these items no longer apply.
 
 ### Verification (on current working tree)
-- `npx turbo run typecheck` → 5/5 workspaces pass (0 errors)
+- `npx turbo run typecheck` → 5/5 workspaces pass (0 errors) — **valid only from a fully-installed tree** (run `yarn install` with `TIPTAP_PRO_TOKEN` set first). A stale `node_modules` yields false errors such as `Unknown compiler option 'noUncheckedSideEffectImports'` when an older hoisted TypeScript (< 5.6) resolves instead of 6.0.2.
 - ESLint on each file touched by this review — clean (pre-existing lint errors in `packages/wysiwyg` and `packages/shared` are unchanged by these edits)
 - `npx turbo run test` → all suites green (950 shared, 706 creative-portal, plus customer-portal and wysiwyg)
+
+---
+
+## Post-review follow-ups (after this report was written)
+
+- **Stale comment cleanup** — two comments still referenced the old `utcToZonedTime` name even though the code now uses `toZonedTime`, so the "0 old date-fns-tz names remaining" claim held in source but not in comments. Fixed in `apps/creative-portal/.../OrderJobs/partials/JobCard.tsx` and `.../DueDatePicker/hooks.ts` — commit `f274bf071`. The claim is now literally true (0 occurrences in code **and** comments).
+- **PR description `dom.iterable` note corrected** — the description previously justified dropping `dom.iterable` as "merged into `dom` in TS 6.0", which is inaccurate: `dom.iterable` is still a distinct lib in TS 6.0. It was dropped because no typed source iterates DOM collections (`NodeList`, `FormData.entries()`, etc.); the note now states this and flags re-adding the lib if such iteration is introduced.
