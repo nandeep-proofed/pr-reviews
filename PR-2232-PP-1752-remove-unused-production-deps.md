@@ -32,16 +32,25 @@ The dependency-removal core of the PR is **clean and correct**. Each removed pac
 - `@mdx-js/react@1` — no source imports. `theme-ui > @theme-ui/mdx` keeps a `^1 || ^2` peer requirement now satisfied by the hoisted `@mdx-js/react@2.3.0`. Build verifies this resolves.
 - `tiptap-commands` — Tiptap v1 package, no imports. Safe.
 - `@apollo/federation` resolution — no Apollo consumers in the tree. Safe.
-- `axios-mock-adapter` → devDeps — only consumer is `apps/creative-portal/setup/api/mocks.ts`, which imports only types (`from "axios-mock-adapter/types"`) and whose `mockEndpoints` export is never called. Move is safe.
-- `happy-dom` → devDeps — no consumers in `packages/wysiwyg/src/` or its `vitest.config.ts` (which uses `environment: "jsdom"`). Move is safe but the package appears to be fully unused; could be dropped entirely.
+- `axios-mock-adapter` → devDeps → **fully removed in `47bfdb258`** along with its only (dead) consumer `apps/creative-portal/setup/api/mocks.ts`. Originally the PR moved it to devDeps; follow-up commit dropped it entirely since the file that imported its types is now deleted (855 lines, `mockEndpoints` had zero importers).
+- `happy-dom` → devDeps → **fully removed in `47bfdb258`**. No consumers in `packages/wysiwyg/src/` or its `vitest.config.ts` (which uses `environment: "jsdom"`); confirmed repo-wide.
 
-**The problem is everything else in the diff.** Seven non-package.json files received Prettier formatting reverts that conflict with the project's Prettier 3 setup and re-introduce exactly the regression that PP-1858 (commit `61f79fa05` on develop, *"restore develop formatting on files churned by stale local prettier (v2 shim)"*) explicitly fixed. The PR branch's local Prettier evidently emitted the legacy v2 format `({...} as T)` and `: x ?? y` instead of the v3 format `({...}) as T` and `: (x ?? y)`. Validating against develop confirms each of these touched files now newly fails `npx turbo run lint`.
+~~**The problem is everything else in the diff.** Seven non-package.json files received Prettier formatting reverts that conflict with the project's Prettier 3 setup and re-introduce exactly the regression that PP-1858 (commit `61f79fa05` on develop, *"restore develop formatting on files churned by stale local prettier (v2 shim)"*) explicitly fixed.~~
+
+**Update (commit `23ceb9695`):** Issue 1 resolved. Workspace-local `eslint --fix` re-applied on all 10 files; the v3 canonical output (`}) as T`, `: (x ?? y)`) is restored to match develop. Re-running eslint on the 10 files produces zero `prettier/prettier` errors. Root cause of the original regression: `node_modules/.bin/prettier` symlink pointed at the v2.8.8 binary bundled inside `@storybook/cli` instead of the root-installed v3.5.3 — a local-env bug, not a PR-author choice. Symlink repointed; lint-staged hook now formats correctly.
 
 ---
 
 ## Issues Found
 
-### 1. PR re-introduces the stale-Prettier formatting fixed by PP-1858 — lint regression
+### 1. ~~PR re-introduces the stale-Prettier formatting fixed by PP-1858 — lint regression~~ ✅ RESOLVED in commit `23ceb9695`
+
+**Status:** Fixed. Workspace-local `eslint --fix` re-applied to all 10 files; Prettier 3 canonical output restored to match develop. Root cause was a stale `node_modules/.bin/prettier` symlink pointing at Prettier 2.8.8 inside `@storybook/cli`; symlink repointed to root-installed v3.5.3. The original finding is preserved below for history.
+
+---
+
+<details>
+<summary>Original finding (resolved)</summary>
 
 **[File: apps/creative-portal/api/jobs/\[jobId\]/patchJob.test.ts]**
 
@@ -89,9 +98,16 @@ const customerText =
 
 Important: do NOT run a global `yarn format` that would also touch the ~100 unrelated files already failing lint on develop. Restrict the fix to the 7 files this PR is actually modifying. Alternative if `yarn lint:fix` overreaches: `git checkout origin/develop -- <each file>` and then re-apply the PR's actual intended changes — but those 7 files have **no intended changes** beyond the formatting revert itself, so a straight `git checkout origin/develop -- <file>` for all 7 is the cleanest fix. After that, only `package.json` / `yarn.lock` files should remain in the PR diff.
 
+</details>
+
 ---
 
-### 2. devDependencies blocks broken out of alphabetical order
+### 2. ~~devDependencies blocks broken out of alphabetical order~~ ✅ MOOT after commit `47bfdb258`
+
+`axios-mock-adapter` is no longer in either deps or devDeps — it was removed entirely along with the dead file that imported it (see Issue 5). Alphabetical-order concern dissolves.
+
+<details>
+<summary>Original finding</summary>
 
 **[File: apps/creative-portal/package.json]**
 
@@ -105,9 +121,16 @@ Important: do NOT run a global `yarn format` that would also touch the ~100 unre
 
 **Fix:** Move `"axios-mock-adapter": "^1.21.2"` further down so it sits alphabetically between other unscoped entries (e.g. after `autoprefixer` if that exists in dev, otherwise after the `@`-scoped block ends).
 
+</details>
+
 ---
 
-### 3. Same alphabetical-order issue in wysiwyg devDependencies
+### 3. ~~Same alphabetical-order issue in wysiwyg devDependencies~~ ✅ MOOT after commit `47bfdb258`
+
+`happy-dom` has been removed entirely from `packages/wysiwyg/package.json` (see Issue 4). No remaining position to argue about.
+
+<details>
+<summary>Original finding</summary>
 
 **[File: packages/wysiwyg/package.json]**
 
@@ -121,9 +144,16 @@ Important: do NOT run a global `yarn format` that would also touch the ~100 unre
 
 **Fix:** Place `"happy-dom": "^20.0.2"` immediately before `jsdom` (which it already happens to land before), or — preferably — between `eslint-plugin-tailwindcss` and `postcss` where its alphabetical position actually lives.
 
+</details>
+
 ---
 
-### 4. `happy-dom` move is half a job — package is unused
+### 4. ~~`happy-dom` move is half a job — package is unused~~ ✅ RESOLVED in commit `47bfdb258`
+
+**Status:** Fixed. `happy-dom@^20.0.2` removed entirely from `packages/wysiwyg/package.json`. Repo-wide grep confirmed zero source / config / `@vitest-environment` references; vitest still uses `environment: "jsdom"`. `yarn.lock` regenerated; build + 1,498 tests green.
+
+<details>
+<summary>Original finding</summary>
 
 **[File: packages/wysiwyg/package.json]**
 
@@ -137,9 +167,16 @@ Important: do NOT run a global `yarn format` that would also touch the ~100 unre
 
 **Fix:** Remove `happy-dom` from `packages/wysiwyg/package.json` entirely instead of moving it. Verify by running `npx turbo run test --filter=@proofed/wysiwyg-editor` — wysiwyg tests use jsdom and should be unaffected.
 
+</details>
+
 ---
 
-### 5. `apps/creative-portal/setup/api/mocks.ts` is dead code (informational)
+### 5. ~~`apps/creative-portal/setup/api/mocks.ts` is dead code (informational)~~ ✅ RESOLVED in commit `47bfdb258`
+
+**Status:** Fixed. Deleted `apps/creative-portal/setup/api/mocks.ts` (855 lines of unused fixture data) and dropped `axios-mock-adapter@^1.21.2` from `apps/creative-portal/package.json` devDeps. The package was only ever imported for types in the deleted file, and `mockEndpoints` had zero importers. `yarn.lock` regenerated; build + 1,498 tests green.
+
+<details>
+<summary>Original finding</summary>
 
 **[File: apps/creative-portal/setup/api/mocks.ts]**
 
@@ -153,16 +190,20 @@ Important: do NOT run a global `yarn format` that would also touch the ~100 unre
 
 **Fix:** Optional follow-up — delete `apps/creative-portal/setup/api/mocks.ts` and drop `axios-mock-adapter` from `devDependencies`. Not required for this PR.
 
+</details>
+
 ---
 
 ## Validation Checks
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ✅ | 1,498/1,498 pass in creative-portal; all 4 workspaces pass. **Note**: First run failed on a stale `.next/standalone/.../ai-review-feedback.test.ts` (pre-existing leftover build artifact, unrelated to PR). Cleaned and re-ran — clean pass. |
+| `npx turbo run test` | ✅ | 1,498/1,498 pass across all 4 workspaces (after deleting stale `.next/standalone/.../ai-review-feedback.test.ts` leftover — pre-existing artifact, unrelated to PR). |
 | `npx turbo run typecheck` | ✅ | 0 errors across 5 workspaces |
-| `npx turbo run lint` | ❌ | **PR introduces +3 newly failing files in customer-portal** and **+7 in creative-portal** (every test/source file the PR touched). Separately, ~101 lint errors exist pre-existing on develop in unrelated files. |
-| `npx turbo run build` | ✅ | All 4 builds clean (Storybook output-files warning is config noise, not failure) |
+| `npx turbo run lint` | ✅ (after `23ceb9695`) | The 10 PR-touched non-package.json files now lint clean. Pre-existing ~101 lint errors on develop (unrelated files) remain — not introduced by this PR. |
+| `npx turbo run build` | ✅ (after `47bfdb258`) | All 4 workspaces build cleanly in 2m35s with 0 TypeScript warnings. Remaining warnings (Storybook asset-size, rollup `output.exports`, Node TLS) are pre-existing config noise. |
+| Fresh `yarn install` from empty `node_modules` | ✅ | 57s; `success Saved lockfile`. Confirms `yarn.lock` is consistent with all 4 `package.json` files. |
+| Dep removals verified individually | ✅ | All 8 PR-listed package changes + 3 follow-up changes (drop `happy-dom`, drop `axios-mock-adapter`, delete `mocks.ts`) verified against repo-wide source/config grep. Transitive resolutions checked: `@types/node-fetch` via `googleapis`, `core-js` via Storybook, `@mdx-js/react@2` via theme-ui. |
 
 ---
 
@@ -171,7 +212,7 @@ Important: do NOT run a global `yarn format` that would also touch the ~100 unre
 - ✅ PR is pure dependency-cleanup + (unintended) formatting. No new functionality, so no new tests needed.
 - ✅ Existing test suite (1,498 tests in creative-portal + customer-portal + shared + wysiwyg) all pass against the new dependency tree.
 - ✅ Builds verify removed deps are not actually needed by the production bundle.
-- ⚠️ Stale `.next/standalone/` triggered a test discovery failure; cleaning resolved it. Not a blocker, but worth noting that vitest's `include: ["**/*.test.{ts,tsx}"]` lacks a `.next/**` exclude — a separate hardening task.
+- ✅ Stale `.next/standalone/` test-discovery gap hardened in `50aa47cd5` — both `apps/{creative,customer}-portal/vitest.config.ts` now spread `configDefaults.exclude` and add `"**/.next/**"`. Verified by running tests with a stale `.next` artifact present: test file count went from 152 (1 failed) to 151 (151 passed), with the full 1,498-test suite still green.
 
 ---
 
@@ -179,24 +220,36 @@ Important: do NOT run a global `yarn format` that would also touch the ~100 unre
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Dependency removals are sound; runtime verified by build |
-| Regression risk | ⚠️ Medium — stale-prettier reverts re-introduce a fix that already shipped; pure cosmetic but creates noisy diffs and live lint failures |
-| Tests | ✅ All pass after cleaning stale build artifact |
-| Code quality | ⚠️ Sound on the deps; broken on the formatting + alphabetical ordering |
-| Validation suite | ❌ Lint fails with +10 new failing files attributable to this PR |
-| Mergeable state | ❌ Dirty (per CLAUDE.md "Do NOT commit if any of these fail"); GitHub also reports `mergeable_state: "dirty"` (likely separate yarn.lock conflict that needs a fresh resolve) |
+| Correctness | ✅ All 11 dep changes (8 PR + 3 follow-up) verified individually; runtime confirmed by build + tests |
+| Regression risk | ✅ Resolved — Prettier v3 canonical restored in `23ceb9695`; symlink root-cause documented |
+| Tests | ✅ 1,498/1,498 across all 4 workspaces |
+| Code quality | ✅ Deps sound, formatting clean, all dead code removed (`mocks.ts` deleted) |
+| Validation suite | ✅ Lint, typecheck, build, fresh `yarn install` all green |
+| Mergeable state | ✅ GitHub reports `MERGEABLE` / `mergeStateStatus: CLEAN` (after `47bfdb258` push) |
 
 ---
 
 ## Recommendation
 
-**Request changes**
+**Approve and merge.** (Was "Request changes" before `23ceb9695`; downgraded as findings were addressed.)
 
-1. **(blocker)** Restore develop's formatting on the 7 non-package.json files the PR touches. Cleanest path: `git checkout origin/develop -- <each of the 7 files>` since the PR's intended scope is dependency cleanup only and none of those files needs any change. After that, re-verify the PR diff contains only `package.json` files and `yarn.lock`.
-2. **(blocker)** Re-run `npx turbo run lint` and confirm the PR no longer adds to develop's error count.
-3. **(blocker)** Resolve the `mergeable_state: "dirty"` from GitHub (the PR currently has a merge conflict — likely on `yarn.lock` after recent develop merges). Re-resolve and re-push.
-4. **(should-fix)** Place `axios-mock-adapter` and `happy-dom` in alphabetical order within their devDependencies blocks (Issues 2 & 3).
-5. **(should-fix)** Consider removing `happy-dom` entirely instead of moving it — nothing references it (Issue 4).
-6. **(nice-to-have / follow-up)** Delete the dead `apps/creative-portal/setup/api/mocks.ts` and drop `axios-mock-adapter` entirely (Issue 5).
+1. ~~**(blocker)** Restore develop's formatting on the 7 non-package.json files the PR touches.~~ ✅ Done in `23ceb9695`.
+2. ~~**(blocker)** Re-run `npx turbo run lint` and confirm the PR no longer adds to develop's error count.~~ ✅ Verified.
+3. ~~**(blocker)** Resolve `mergeable_state: "dirty"` from GitHub.~~ ✅ GitHub now reports `MERGEABLE` / `CLEAN` after the latest pushes.
+4. ~~**(should-fix)** Place `axios-mock-adapter` and `happy-dom` in alphabetical order within their devDependencies blocks (Issues 2 & 3).~~ ✅ Moot — both packages removed entirely in `47bfdb258`.
+5. ~~**(should-fix)** Consider removing `happy-dom` entirely instead of moving it — nothing references it (Issue 4).~~ ✅ Done in `47bfdb258`.
+6. ~~**(nice-to-have / follow-up)** Delete the dead `apps/creative-portal/setup/api/mocks.ts` and drop `axios-mock-adapter` entirely (Issue 5).~~ ✅ Done in `47bfdb258`.
 
-Once 1–3 land, this PR is straightforwardly mergeable — the actual dependency-cleanup work is solid, well-justified, and matches the Jira ticket's intent (and then some).
+All review findings resolved. The PR ships **PP-1752 in full + scope-creep cleanups** (`@mdx-js/react@1`, `tiptap-commands`, `node-fetch`+types, `@apollo/federation`) and additionally removes one further fully-dead file (`mocks.ts`) and two further unused dev-deps (`happy-dom`, `axios-mock-adapter`). Solid, well-justified, ready for merge.
+
+---
+
+## Commit log (this PR branch)
+
+| Commit | Purpose |
+|---|---|
+| `50aa47cd5` | Exclude `.next/**` from vitest test discovery in both Next.js apps |
+| `47bfdb258` | Drop unused `happy-dom` + `axios-mock-adapter` and delete `mocks.ts` |
+| `23ceb9695` | Restore Prettier 3 formatting on 10 files churned by stale local Prettier 2 shim |
+| `f34c6a062` | Merge develop |
+| (earlier) | Original PP-1752 dep removals + devDeps moves |
