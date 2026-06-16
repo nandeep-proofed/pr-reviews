@@ -2,7 +2,12 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2267
 **Jira:** https://proofed.atlassian.net/browse/PP-1785
-**Status:** Code Review
+**Status:** Waiting for Deployment
+**Branch:** `feature/PP-1785-select-all-orders-full-dataset` → `develop`
+**Author:** gaurav-proofed
+**Stats:** +1193 / -91 across 16 files (10 commits)
+
+> Note: a prior-revision review existed at this path; it has been superseded. Most of that review's findings (stale-closure in toggleRowSelected, lingering isAllSelected across empty-dataset, missing mirror-case test, miscounted test count) have since been addressed by the PR author in subsequent commits and are pinned by the new test suites.
 
 ---
 
@@ -10,153 +15,128 @@
 
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
-| FR1: "Select All" applies to entire result set (incl. non-loaded). | `toggleAllRowsSelected` operates on the hook's full `data` array (not `dataPaginated`). Backend already returns the full filtered set, so all ids are present. | ✅ Addressed |
-| FR2: Newly loaded orders auto-select while "All" is active. | Cleanup effect (`useTableSelection.ts:172-200`) detects `dataHasChanged && isAllSelected` and replaces `selectedRowIds` with `Object.fromEntries(data.map(...))`. Unit test "merges newly-arrived ids …" exercises this. | ✅ Addressed |
-| FR3: Toolbar shows "All orders selected (X)". | `BulkToolbar/index.tsx:156-161` returns `All orders selected (${selectedRowsCounter})` when both flags set. | ✅ Addressed |
-| FR4: Filter change resets "All" + count reflects filtered set. | `!isSameView` branch resets `isAllSelected=false`, `selectedRowIds={}`. Count is `Object.keys(selectedRowIds).length` which matches the full filtered set when All is active. | ✅ Addressed |
-| FR5: Deselecting after "All" → partial selection. | `toggleRowSelected` flips `setIsAllSelected(false)` on any explicit `isSelected===false` or implicit-deselect. Unit test "deselecting a single row …" verifies. | ✅ Addressed |
-| FR6: "All" state distinct from manual multi-select. | `isAllSelected` (drives toolbar label) split from `isHeaderFullyChecked` (drives checkbox visual). Manual tick-every-row keeps `isAllSelected=false`. Unit test "distinguishes explicit 'Select All' …" verifies. | ✅ Addressed |
+| **FR1** — "Select All" applies to the entire result set, not just visible orders | `toggleAllRowsSelected` now writes every id from `data` into `selectedRowIds`; the page-slice arg was dropped from both the hook and `SelectionHeader` | ✅ |
+| **FR2** — Newly loaded orders auto-selected while "All" is active | Cleanup effect re-materialises the full id map from `data` whenever `isAllSelected` is true; deselect of individual ids still works because the per-row deselect path drops the "All" flag (see FR5) | ✅ |
+| **FR3** — Batch actions label shows total count: "All orders selected (X)" | `BulkToolbar/index.tsx` toolbarLabel branch returns ``All orders selected (${selectedRowsCounter})`` when both flags set | ✅ |
+| **FR4** — Filter change resets "All" selection | Cleanup effect's `!isSameView` branch clears `isAllSelected` and `selectedRowIds` | ✅ (resets — Jira allows "reset or update") |
+| **FR5** — Deselecting after "All" → partial selection with updated count | `toggleRowSelected` records `pendingBreakAllModeRef` inside the updater (so batched calls see the post-Select-All map) and a flush effect flips `isAllSelected` once the map commits | ✅ |
+| **FR6** — "All" state distinguishable from manual multi-select | Separate `isAllSelected` state vs `isHeaderFullyChecked` derivation. Restoring ids from sessionStorage does NOT re-assert "All" mode (comment + test pin this) | ✅ |
 
-Scope creep / extras (out of Jira scope but in PR):
-- Prettier reformat of `as` casts in `PaymentDetailsStep2/hooks.test.ts`, `PaymentDetailsStep2/hooks.ts`, `customer-portal/hooks/useNavigation/index.test.ts` — unrelated to PP-1785 (probably a lint-fix sweep). Harmless but should ideally land in a chore PR.
+No scope creep beyond the ticket. Three unrelated test files (`DeadlineDatePicker/hooks.test.ts`, `JobReturnTimesTray/index.test.tsx`, `OrderJobs/utils.test.ts`) plus `cells/__tests__/fixtures.ts` carry pure Prettier `}) as T` → `} as T)` reformats — incidental but harmless.
 
 ---
 
 ## Architecture Analysis
 
-The fix correctly identifies that the prior implementation conflated "rendered slice" (`dataPaginated`, ~50 rows from the infinite-scroll cursor) with "selectable universe" (the full filtered set returned by the server in one call). Routing the header checkbox and bulk-toolbar derivations through the full `data` array fixes FR1 without any new API work.
+The implementation introduces a clean separation between "all rows happen to be ticked" (`isHeaderFullyChecked`, derived) and "user explicitly invoked Select All" (`isAllSelected`, persistent state). That separation is what makes FR2 (auto-merge new ids) and FR6 (distinct from manual tick) work without a count-based heuristic.
 
-The dual-flag design (`isAllSelected` vs `isHeaderFullyChecked`) is the right way to satisfy FR6 — the checkbox needs to reflect "every visible row checked" regardless of provenance, while the toolbar label needs to know whether the user pressed "Select All" or coincidentally ticked every row.
+Three subtle design choices stand out and are well documented in source comments:
 
-The cleanup `useEffect` (lines 154–208) handles the three relevant transitions in one place: (a) filter change → full reset, (b) data change + All mode → re-broadcast selection over new ids, (c) data change + manual mode → prune ids that left the dataset. Combining filter-reset and data-change handling in one effect is more concise than two effects but ties the FR2/FR4 fates together — if you ever need to relax FR2 (e.g. cap auto-select), you'll be untangling them.
+1. **Materialise the full id map rather than carry a flag + count.** Justified on lines 125–133 of `useTableSelection.ts`: the orders table loads the entire filtered result set in one call. The comment explicitly flags that switching to server-side pagination would silently break this. Good load-bearing assumption to capture in source.
 
-The `BulkToolbar` lives in `packages/shared` and is consumed by `TeamMembersTable` and `ChargeTable` in addition to the orders table. The label literal "All orders selected" pre-dated this PR; the new `(N)` suffix now lights up for those consumers too if they ever pass `isAllRowsSelected + selectedRowsCounter`. Pre-existing naming smell, not a new bug.
+2. **Defer the All-mode break via `pendingBreakAllModeRef` + flush effect.** Because `selectedRowIds` lives in `BulkActionsContextProvider` (a different component), calling `setIsAllSelected` from inside the row-id updater would trigger React's "Cannot update a component while rendering a different component" warning when the updater is processed during the provider's render pass. The defer-via-ref-and-effect pattern fixes this; `useTableSelectionProviderState.test.tsx` specifically pins this regression with a `console.error` spy.
+
+3. **`onDeselect` callback on `useShiftSelect`.** Shift-range shrink deselects rows through the raw setter (bypassing `toggleRowSelected`), so the hook now fires `onDeselect` for any shrink/replace. `table.tsx` wires this to `breakAllSelectedMode`. Covered by `shiftSelectAllMode.test.ts`.
+
+The hook's public surface change is minimal: `selectedRowsData` removed (verified no remaining consumers); `isAllRowsSelected` renamed to `isAllSelected`; `breakAllSelectedMode` added; `toggleAllRowsSelected`'s second `dataPaginated` arg dropped. `table.tsx` is the only consumer of the renamed/removed names — caller updated consistently. `BulkToolbar`'s public prop (`isAllRowsSelected`) is unchanged, so the other tables that consume it (`TeamMembersTable`, `ChargeTable`) are not affected by the label change unless they start passing `isAllRowsSelected={true}` themselves.
 
 ---
 
 ## Issues Found
 
-### 1. `toggleRowSelected` reads `selectedRowIds` from a stale closure inside a synchronous loop
+### 1. Theoretical race: data refetch landing between commit and All-mode flush could resurrect a deselected row
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/hooks/useTableSelection.ts]**
-**Function/Class:** `toggleRowSelected`
+
+**Function/Class:** `toggleRowSelected` flush effect interacting with cleanup effect
+
 **Severity:** low
-**Problem:** The "implicit deselect" detection reads from the captured `selectedRowIds` rather than from the functional updater's `prev`:
+
+**Problem:** The All-mode break for an implicit deselect is deferred from the updater to a `useEffect` keyed on `selectedRowIds`. In normal flow this is fine — the flush effect runs synchronously after commit, before the next event loop tick. But if a React Query auto-refresh resolves a microtask between the commit of the deselect and the flush effect running, the cleanup effect (which depends on `data` and `isAllSelected`) could fire first while `isAllSelected` is still `true`, hit the `else if (isAllSelected)` branch on line 220, and re-materialise the full id map from the new `data` — putting the just-deselected row back into the selection. The flush effect then runs and flips `isAllSelected` to `false`, but the row remains selected.
+
+**Impact:** A user who unticks one order at almost exactly the moment the table auto-refreshes could see the deselected order silently re-selected, while the toolbar label correctly switches to "N orders selected". Hard to reproduce in practice and not observed in any test, but the ordering between effects and microtasks is not guaranteed across React versions.
+
+**Fix:** Cheapest is to also gate the cleanup effect's re-assert branch on the pending-break ref:
 
 ```typescript
-setSelectedRowIds((prev) => {
-  const shouldSelect = isSelected ?? !prev[rowId];
-  ...
-});
-
-if (
-  isSelected === false ||
-  (isSelected === undefined && selectedRowIds[rowId])  // <- closure, not prev
-) {
-  setIsAllSelected(false);
+} else if (isAllSelected && !pendingBreakAllModeRef.current) {
+  setSelectedRowIds(
+    Object.fromEntries(data.map((row) => [row.id, true] as const))
+  );
 }
 ```
 
-When `toggleRowSelected` is invoked multiple times synchronously in the same render (e.g. via `toggleGroupSelection` looping `orderIds.forEach((id) => toggleRowSelected(id, shouldSelect))` in `table.tsx:177`), every call reads the same `selectedRowIds` snapshot. In `toggleGroupSelection`, `shouldSelect` is always explicit (`true`/`false`), so the `isSelected === undefined` branch never fires and the bug is masked. But future call sites that pass `undefined` repeatedly will hit the staleness.
+Not a blocker; worth a quick consider.
 
-**Impact:** Today this is latent — no caller currently invokes the toggle path synchronously without an explicit boolean. But the logic reads as "fires `setIsAllSelected(false)` if we were just deselecting", and that contract silently breaks under synchronous batched calls.
-**Fix:** Compute the deselect signal inside the functional updater and stage the side-effect via a ref, e.g.:
-
-```typescript
-const wasDeselectRef = useRef(false);
-
-const toggleRowSelected = useCallback(
-  (rowId: string, isSelected?: boolean) => {
-    setSelectedRowIds((prev) => {
-      const wasSelected = !!prev[rowId];
-      const shouldSelect = isSelected ?? !wasSelected;
-      if (!shouldSelect && wasSelected) wasDeselectRef.current = true;
-      const next = { ...prev };
-      if (shouldSelect) next[rowId] = true;
-      else delete next[rowId];
-      return next;
-    });
-
-    if (wasDeselectRef.current) {
-      wasDeselectRef.current = false;
-      setIsAllSelected(false);
-    }
-  },
-  [setSelectedRowIds]
-);
-```
-
-This also drops `selectedRowIds` from the dep array and stops the callback from re-creating on every selection change.
-
-### 2. `isAllSelected` lingers across a transient "empty filtered dataset" window
+### 2. `clearSelection` returned by the hook but no consumer destructures it
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/hooks/useTableSelection.ts]**
-**Function/Class:** cleanup `useEffect` (lines 154–208)
+
+**Function/Class:** `useTableSelection` return value
+
 **Severity:** low
-**Problem:** When the data array goes `[…5 ids…] → [] → [6 new unrelated ids]` while the filter doesn't change (e.g. all five orders complete and disappear via auto-refresh, then a brand-new order arrives), the path is:
-- empty step: `dataHasChanged=true` but `data.length > 0` is false → outer `if` is skipped, `previousDataIds.current` is NOT updated, `isAllSelected` stays `true`.
-- refill step: `dataHasChanged=true`, `data.length > 0` → enters `isAllSelected` branch → silently selects the 6 unrelated new ids.
 
-The other "clear on empty" effect (line 216) only fires when `!areFiltersEnabled`, so an actively-filtered view can sit in this stuck state indefinitely.
+**Problem:** `clearSelection` is exported in the return object but `table.tsx` doesn't destructure it; the bulk-actions close path uses `toggleAllRowsSelected(false)` instead. The PR is the right opportunity to drop dead public surface, even if it was already there before.
 
-**Impact:** Long-lived dashboard sessions can accumulate "All Selected" semantics across what the user perceives as different cohorts of orders. The toolbar will read `All orders selected (6)` for the new cohort with no user action — matches FR2's literal wording but the user never opted into "All" for the new orders.
-**Fix:** Either (a) reset `isAllSelected` when data goes to 0 even if filters are enabled, or (b) update `previousDataIds.current` in the empty step so the refill is treated like a fresh dataset:
+**Impact:** Dead public surface; future readers may wonder which clear path is canonical.
 
-```typescript
-} else if (data.length === 0 && isAllSelected) {
-  setIsAllSelected(false);
-}
-```
+**Fix:** Either remove `clearSelection` from the return, or switch `useBulkActions`'s `onClose` to use it for clarity (it already does the same thing). Optional cleanup.
 
-Worth confirming the intended behavior with the PM — FR2 reads as "newly arriving orders within the same query", which a 5→0→6 turnover arguably violates.
+### 3. `previousFilters` in cleanup effect deps array is a no-op
 
-### 3. Test "selects current rows when stale ids carry over with a matching count" doesn't actually exercise the stale-id path
+**[File: apps/creative-portal/components/molecules/tables/TableWithFilters/hooks/useTableSelection.ts]**
 
-**[File: apps/creative-portal/components/molecules/tables/TableWithFilters/hooks/__tests__/useTableSelection.test.ts]**
-**Function/Class:** last `it()` block (lines 269–296)
+**Function/Class:** Cleanup effect (line 249–256)
+
 **Severity:** low
-**Problem:** The test pre-seeds `mocks.setSelectedRowIds({ "stale-1": …, "stale-2": …, "stale-3": … })` then mounts the hook. On mount, the cleanup `useEffect` immediately detects `dataHasChanged=true` (`previousDataIds` was empty) and the cleanup branch wipes every id not in `currentDataIds`, so by the time `toggleAllRowsSelected()` is called, `selectedRowIds` is already `{}`. The test passes for the right outcome but not for the reason the name implies — the code path under test is "click Select All from a clean slate", not "click Select All while stale ids are present".
-**Impact:** Low. The behaviour is still correct, and the stale-id guard inside `toggleAllRowsSelected` (`data.every((row) => selectedRowIds[row.id])`) is conceptually covered, just not by this test. Mostly a documentation-correctness issue.
-**Fix:** Either rename to something like `"toggleAllRowsSelected ignores ids not in current data"`, or write a separate test that bypasses the cleanup effect (e.g. seed `previousDataIds.current` indirectly by re-rendering with stable data so the cleanup is a no-op, then inject stale ids and toggle).
 
-### 4. No regression coverage for "All mode + ids leave the dataset"
+**Problem:** `previousFilters` is a `useRef` whose `.current` reference is mutated in place. Including the ref object in the deps array is a no-op for the effect's re-run logic (the ref identity never changes), and risks giving readers a false impression that the effect tracks filter changes through that ref. The effect actually tracks them via `currentEncodedFilters`. Pre-existing; not introduced by this PR.
 
-**[File: apps/creative-portal/components/molecules/tables/TableWithFilters/hooks/__tests__/useTableSelection.test.ts]**
-**Function/Class:** test suite
-**Severity:** low
-**Problem:** The FR2 test only covers `data` growing (`[1,2,3] → [1,2,3,4,5]`). The mirror case — an id leaving the dataset while All mode is active (`[1,2,3] → [1,3,5]`) — isn't exercised. Per the `isAllSelected` branch the resulting `selectedRowIds` will be `{1: true, 3: true, 5: true}` (dropping 2, picking up 5). That's the right behaviour but worth pinning down so a future refactor doesn't silently flip it to "remember 2".
-**Impact:** Light. Risk that a future change breaks the "follow the dataset" semantic without a failing test.
-**Fix:** Add a third `rerender` step to the FR2 test that swaps the dataset and asserts the dropped id is gone and the new id is in.
+**Impact:** Noise in the deps array; no functional issue.
 
-### 5. PR description states 6 unit tests; the file has 8
+**Fix:** Drop `previousFilters` from the deps array. Optional cleanup.
 
-**[File: apps/creative-portal/components/molecules/tables/TableWithFilters/hooks/__tests__/useTableSelection.test.ts]**
-**Function/Class:** N/A
-**Severity:** low
-**Problem:** PR body: "6 cases covering FR2, FR4, FR5, FR6 and the golden path". The test file contains 8 `it()` blocks (including the sessionStorage restore test and the stale-ids test). The runner confirms `Tests 8 passed (8)`.
-**Impact:** None functional, just a doc/changelog discrepancy.
-**Fix:** Update the PR description count to 8 (and the description of what each test covers if useful for reviewers).
-
-### 6. Pre-existing: duplicate `BULK_ACTIONS_CONFIG` defined in both `consts.tsx` and `consts/index.ts`
+### 4. Pre-existing: duplicate `consts.tsx` and `consts/index.ts`
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/consts.tsx]**
-**Function/Class:** `BULK_ACTIONS_CONFIG` (also at `consts/index.ts:27`)
+
+**Function/Class:** `BULK_ACTIONS_CONFIG` / `TABLE_CONFIG`
+
 **Severity:** low
-**Problem:** Two `consts` modules co-exist (`consts.tsx` and `consts/index.ts`), each exporting `BULK_ACTIONS_CONFIG` and `TABLE_CONFIG`. TypeScript module resolution picks the folder index over the sibling `.tsx`, so the `.tsx` defs are dead. Not introduced by this PR (predates it), but flagged because the PR's tests import from `"../../consts"` and inherit the ambiguity.
+
+**Problem:** Two `consts` modules co-exist (`consts.tsx` and `consts/index.ts`), each exporting `BULK_ACTIONS_CONFIG` (and `MIN_SELECTED_FOR_BULK_TOOLBAR: 1` in both). TypeScript module resolution picks the folder index over the sibling `.tsx`, so the `.tsx` defs are dead. Not introduced by this PR.
+
 **Impact:** Future edits to constants may silently land in the dead file.
-**Fix:** Delete `consts.tsx` and consolidate into the `consts/` folder, or vice-versa. Out of scope for this PR but worth a follow-up ticket.
+
+**Fix:** Delete `consts.tsx` and consolidate into the `consts/` folder. Out of scope for this PR but worth a follow-up ticket.
+
+---
+
+## Validation Checks
+
+| Check | Result | Notes |
+|---|---|---|
+| `npx turbo run test` | ⚠️ Pre-existing failure | **1609/1609 tests pass.** One test-file collection failure in `apps/creative-portal/.next/standalone/apps/creative-portal/api/aiReviewFeedback/strategy/ai-review-feedback.test.ts` — a stale duplicate inside the Next.js standalone build output, not source code. Cleaning `.next/standalone/` would resolve. PR's new tests (useTableSelection, useTableSelectionProviderState, shiftSelectAllMode, SelectionHeader, BulkToolbar) all pass. |
+| `npx turbo run typecheck` | ⚠️ Pre-existing failure | One error: `apps/creative-portal/setup/api/mocks.ts:1:25` — `Cannot find module 'axios-mock-adapter/types'`. `git blame` traces this line back to commit `5e0b6449e` ("initialised monorepo"). Not touched by this branch. The other typecheck errors the PR description called out (`api/paperless/createDocument/utils.test.ts`, `components/styles/Assets/{consts,utils}.ts`) appear to have been fixed since the PR was opened — they didn't reproduce on the current branch tip. |
+| `npx turbo run lint` | ⚠️ Pre-existing failure | 63 Prettier errors in `packages/wysiwyg/src/` files (`AiChangeBox/index.tsx`, `CommentsContainer/{formatIndividualDiffs.test.ts,utils.ts}`, `EditorContext/hooks.ts`, `extensions/comments/index.ts`). `git status` confirms this branch hasn't touched `packages/wysiwyg/src`. Matches the failure the PR description flagged. |
+| `npx turbo run build` | ⚠️ Pre-existing failure | Fails on the same `setup/api/mocks.ts` axios-mock-adapter type error as typecheck. Same pre-existing root cause. |
+
+**All four failures are unrelated to this PR.** None of the failing files appear in the PR's changed-files list. The PR description acknowledged the wysiwyg lint and creative-portal build failures upfront.
 
 ---
 
 ## Tests
 
-- ✅ New `useTableSelection.test.ts` — 8 cases, all pass (`yarn app:creative-portal test useTableSelection` → 8/8).
-- ✅ New `BulkToolbar.test.tsx` covers all three label branches (FR3 + pre-existing partial + pre-existing All-without-counter).
-- ✅ FR2, FR4, FR5, FR6 each have at least one dedicated unit test.
-- ⚠️ Missing: All-mode + id-removal scenario (see issue 4).
-- ⚠️ Missing: Manual QA walkthrough in dev against a >50-order filter (PR description's `[ ] Manual QA …` is unchecked). FR1 ultimately hinges on this — please verify before merge.
-- ⚠️ No E2E coverage (acknowledged in the PR body).
-- ⚠️ Cross-table regression check: `TeamMembersTable` / `ChargeTable` still use `BulkToolbar`; the new `(N)` branch in `toolbarLabel` only triggers when `isAllRowsSelected && selectedRowsCounter > 0` — confirm by visual inspection that those callers haven't started showing "All orders selected (N)" with a misleading number.
+- ✅ `useTableSelection.test.ts` — 10 cases covering FR1, FR2 (merge + drop), FR4, FR5, FR6, sessionStorage restore, the batched Select-All-then-deselect stale-closure regression, stale-id carry-over with matching count, empty-dataset cohort reset
+- ✅ `useTableSelectionProviderState.test.tsx` — Backs `selectedRowIds` with real React state via provider; spies on `console.error` to assert no "Cannot update a component while rendering" warning fires from the implicit-deselect path. Pins the `pendingBreakAllModeRef` flush pattern.
+- ✅ `shiftSelectAllMode.test.ts` — Integration of `useTableSelection` + `useShiftSelect` confirming a shift-range shrink breaks All mode while a pure extension preserves it, plus a follow-up refresh that must not re-select the shrunk-out row
+- ✅ `useShiftSelect.test.ts` — 3 new cases for the `onDeselect` contract (fires on shrink and replace, not on extension or plain click)
+- ✅ `SelectionCell/Header.test.tsx` — Header checkbox state matrix: checked while `isAllSelected` (even before refresh merges new ids), checked when every row is manually ticked, indeterminate on partial, unchecked on empty + All mode (cohort gone)
+- ✅ `BulkToolbar/BulkToolbar.test.tsx` — Three label variants (with counter, without counter, manual multi-select)
+- ⚠️ Manual QA against a >50-order filter — explicitly called out as outstanding in the PR checklist
+- ⚠️ E2E — no Playwright coverage for this path; acknowledged
+
+Test quality is high: the new tests catch subtle regressions (stale-closure, render-phase warning) the obvious functional tests would miss.
 
 ---
 
@@ -165,25 +145,24 @@ Worth confirming the intended behavior with the PM — FR2 reads as "newly arriv
 | Aspect | Status |
 |---|---|
 | Correctness | ✅ |
-| Regression risk | ⚠️ Medium (shared BulkToolbar label change touches other tables; edge case where `isAllSelected` lingers across data turnover) |
-| Tests | ⚠️ Good for unit, missing manual QA and one mirror-case test |
-| Code quality | ✅ |
-| Mergeable state | ✅ Clean |
+| Regression risk | ✅ Low — hook's public surface changes are absorbed by the single consumer (`table.tsx`); `BulkToolbar`'s public prop is unchanged so other tables are untouched |
+| Tests | ✅ Strong (5 new test files, 1 file extended; covers the contract + render-phase warning + shift-select integration) |
+| Code quality | ✅ Good — load-bearing assumptions documented inline; design choices explained where non-obvious |
+| Validation suite | ⚠️ All 4 checks fail, but on pre-existing issues in files this PR doesn't touch (verified per-file via `git status` and `git blame`) |
+| Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`); pre-existing repo-wide gate failures are tracked separately |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions.**
+**Approve with optional suggestions.**
 
-The fix is sound, the FR↔code mapping is clean, and unit coverage is meaningful. Block-on items before merge:
+The implementation cleanly satisfies all 6 functional requirements with thoughtful state separation, strong test coverage including regression pins, and well-documented load-bearing assumptions. Validation failures are all in files this PR doesn't touch.
 
-1. Complete the manual QA pass against a >50-order filter (PR checkbox still unchecked). This is the only way to verify FR1 + FR2 + FR4 in the real lazy-load path.
-2. Sanity-check `TeamMembersTable` and `ChargeTable` BulkToolbar labels still render correctly — the label-template change is in a shared component.
+Optional follow-ups (none blocking):
 
-Nice-to-haves (can land as follow-ups):
-
-3. Refactor `toggleRowSelected` per issue 1 to drop `selectedRowIds` from the dep array (perf + closure correctness).
-4. Decide the desired behaviour for issue 2 (lingering `isAllSelected` across empty-dataset transition) with the PM and either fix or document.
-5. Add the missing FR2 mirror-case test (issue 4) and rename the misleading test (issue 3).
-6. Open a chore ticket to deduplicate the two `consts` modules (issue 6).
+1. Consider the `pendingBreakAllModeRef` gate in the cleanup effect's All-mode re-assert branch to close the theoretical race in Issue #1.
+2. Drop the unused `clearSelection` from the hook return, or switch `useBulkActions`'s `onClose` to use it (purely cosmetic — pre-existing).
+3. Drop `previousFilters` from the cleanup effect's deps array (pre-existing).
+4. Complete the manual QA pass against a >50-order filter that the PR checklist still has unchecked. This is the only way to confirm FR1+FR2+FR4 in the real lazy-load path end-to-end.
+5. The repo-wide gate failures (axios-mock-adapter typecheck, wysiwyg lint, stale `.next/standalone/` test) are not this PR's responsibility but block the project's "0 failures before commit" rule — worth raising as a separate cleanup ticket.
