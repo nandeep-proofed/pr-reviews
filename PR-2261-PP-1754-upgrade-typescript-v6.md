@@ -32,6 +32,7 @@ The core change is sound and well-reasoned: `moduleResolution: "node" → "bundl
 - **swiper 8→11** (`OrderJobs`): `Mousewheel` moved from `"swiper"` → `"swiper/modules"`. Correct for v11. ✅ (needs visual QA — 3 majors.)
 - **file-type rework** (`processWorkItemContentWithMetadata`): `fileTypeFromFile(path)` → header-only read (`openSync`/`readSync` first 4100 bytes) + `fileTypeFromBuffer`. The header-only approach is actually a memory improvement over the whole-file read described in the PR body. ✅ logic — but see Issue 1 for the packaging fallout.
 - **tsconfig `paths`** migration is complete (typecheck passes across all 5 workspaces, proving every alias import resolves).
+- **husky 8→9** (`7d9fd501b`): `prepare: "husky install"` → `"husky"`, and `.husky/pre-commit` drops the now-deprecated v8 boilerplate (`#!/usr/bin/env sh` + `. "$(dirname -- "$0")/_/husky.sh"`), leaving just `yarn lint-staged`. Correct for v9 — the sourcing line is deprecated in v9 and removed in v10; the hook still runs lint-staged. ✅
 
 The bundler-resolution change is the right call but has a sharp edge: it now resolves dependencies to their raw ESM `source` entry, which surfaces un-transpiled modern syntax to Next's webpack — exactly what broke the customer-portal build (Issue 1, now fixed).
 
