@@ -121,6 +121,21 @@ Then re-verify Sentry still initializes and reports.
 
 ## Validation Checks
 
+### Per-workspace results (Build · Typecheck · Test)
+
+| Workspace | Build | Typecheck | Tests |
+|---|---|---|---|
+| `@proofed/shared` | ✅ | ✅ | ⚠️ 1236/1237 (1 locale failure) |
+| `@proofed/wysiwyg-editor` | ✅ (45s) | ✅ | ✅ 245 passed, 4 skipped |
+| `@proofed/creative-portal` | ✅ (454s) | ✅ | ✅ 1660/1660 |
+| `@proofed/customer-portal` | ✅ (294s) | ✅ | ✅ 335/335 |
+| `@proofed/storybook` | ✅ (26s) | ✅ | — (no tests) |
+| **TOTAL** | **4/4 ✅** | **5/5 ✅** | **3576 pass / 1 fail / 4 skip** |
+
+The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `en_IN`-locale artifact (passes 9/9 under `en_US`/CI; file byte-identical to develop). `lint` remains ❌ only in `@proofed/wysiwyg-editor` (pre-existing prettier formatting, out of scope — see row below).
+
+### Suite-level
+
 | Check | Result | Notes |
 |---|---|---|
 | `npx turbo run test` | ❌ | 1 failure: `@proofed/shared` `formatWordQuantity.test.ts` expects `1,000,000` but got `10,00,000`. **Locale-driven** — the runner's locale is `en_IN`; the test passes 9/9 under `en_US` (CI/UTC), and the file is identical to develop. Not a code regression. creative-portal **1660/1660** ✅, customer-portal **335/335** ✅ |
@@ -133,7 +148,7 @@ Then re-verify Sentry still initializes and reports.
 ## Tests
 
 - ✅ Typecheck green across all 5 workspaces under TS 6.0.2 — strong signal the config migration is correct.
-- ✅ creative-portal (1660) and customer-portal (335) unit suites pass.
+- ✅ creative-portal (1660), customer-portal (335), and wysiwyg (245 + 4 skipped) unit suites pass; shared 1236/1237 (the 1 failure is the locale artifact below).
 - ⚠️ The PR adds no new automated tests, but as a tooling/config upgrade the existing suites are the appropriate coverage. Acceptable for this ticket type.
 - ⚠️ The single shared test failure is environment/locale, not code — but worth pinning `Intl` locale (`en-US`) in `formatWordQuantity` or its test setup so it is deterministic across dev machines (pre-existing on develop; track separately).
 - ✅ **Build now passes (4/4)** after the file-type fix. The PR's own manual test items (Toast, Swiper carousel, file upload + mime detection, Google Picker, Sentry) remain unchecked and must be exercised — file upload/mime detection especially, since that path now bundles file-type 19.x rather than the previously-failing 22.x.
