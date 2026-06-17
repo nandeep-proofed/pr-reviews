@@ -4,8 +4,9 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1750
 **Status:** Open
 **Mergeable state:** ✅ **Up-to-date with `develop`** via merge commit `63d9dd85b` (2026-06-17). All 4 prior conflicts resolved; tree clean.
-**CI status:** local — `test` 1292/1292 pass; `typecheck` clean on both apps. Push to refresh CI.
-**Last reviewed at:** 2026-06-17 (commit `63d9dd85b` — merge from `develop` tip `054c02f83`)
+**CI status:** local — `test` passes on `@proofed/shared` (1292/1292), `@proofed/creative-portal` (1637/1637), `@proofed/customer-portal` (full suite); `typecheck` clean on both apps. Push to refresh CI.
+**Scope cleanup:** 2026-06-17 — 20 files reverted to develop's version (commit `25cb62ae8`) because they carried only Prettier/style drift from earlier merge resolutions, not PP-1750 work. PR diff dropped from 67 → 47 files. See "Scope cleanup" below.
+**Last reviewed at:** 2026-06-17 (commit `25cb62ae8` — formatting-drift revert on top of merge `63d9dd85b`)
 
 ---
 
@@ -65,6 +66,58 @@ Post-merge sanity checks (run before commit `63d9dd85b`):
 - `@proofed/shared` suite: 1292/1292 pass.
 - `@proofed/creative-portal` typecheck: clean.
 - `@proofed/customer-portal` typecheck: clean.
+
+---
+
+## Scope cleanup (2026-06-17, commit `25cb62ae8`)
+
+A reviewer flagged that the PR diff carried formatting noise unrelated to error tracking. Audit confirmed: 20 files had **only** Prettier/style drift vs `develop` — no semantic PP-1750 work — produced by earlier merge resolutions (`a5b12d102`, `765f73031`) that picked the branch's older style over develop's reformatted version. Examples:
+
+- `} as Job);` (v2 style on branch) vs `}) as Job;` (v3 style on develop)
+- 4-space ternary indent on branch vs 2-space on develop
+- `(x ?? y)` parenthesised vs unparenthesised
+- `await importOriginal<typeof …>()` line-break placement
+
+Root cause for why this drift survived: `node_modules/.bin/prettier` was a Yarn-1 hoisting symlink to `@storybook/cli/node_modules/prettier/bin-prettier.js` (v2.8.8), but `package.json` declares `prettier@^3.1.1` (v3.5.3 actually installed). So when `lint-staged` ran `prettier --write` during local commits on the branch, it used v2 — which formats `}) as Job;` back to `} as Job);` — exactly the diff we kept seeing.
+
+**Files reverted to develop's version** (20):
+
+```
+apps/creative-portal/api/aiReviewFeedback/strategy/ai-review-feedback.test.ts
+apps/creative-portal/api/jobs/[jobId]/patchJob.test.ts
+apps/creative-portal/api/mixtures/orders/getBulkActionsData/getBulkActionsData.test.ts
+apps/creative-portal/api/orders/utils.test.ts
+apps/creative-portal/api/utils/jobs/mergeJobPutBody.test.ts
+apps/creative-portal/api/aiReviewFeedback/apiHandlers/submit/index.test.ts
+apps/creative-portal/api/aiReviewFeedback/apiHandlers/submit/index.ts
+apps/creative-portal/components/molecules/tables/ChargeTable/tableColumns.tsx
+apps/creative-portal/components/molecules/tables/TableWithFilters/cells/__tests__/fixtures.ts
+apps/creative-portal/components/organisms/AiFeedbackPanel/hooks/useActiveUuidLifecycle.test.tsx
+apps/creative-portal/components/molecules/JobReturnTimesTray/index.test.tsx
+apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/hooks.tsx
+apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/utils/generateWorkflowComponents.tsx
+apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderJobs/utils.test.ts
+apps/customer-portal/api/utils/mixtures/orders/createOrder/__tests__/utils.test.ts
+apps/customer-portal/api/utils/mixtures/orders/createOrder/utils.ts
+apps/customer-portal/api/utils/mixtures/orders/createOrder/helpers/createOrderAndJobs.ts
+apps/customer-portal/components/molecules/OrderPriceSection/__tests__/utils.test.ts
+packages/shared/components/atoms/DotsLoader/styles.ts
+packages/shared/contexts/richTextEditorContext/provider.tsx
+```
+
+**KEPT** (legitimate PP-1750 work, even though file names don't obviously say "error tracking"):
+
+- `apps/creative-portal/api/utils/workItemContentVersion/serializerUtils.ts`, `tiptapAiChanges.ts`, `apps/creative-portal/components/molecules/tables/TableWithFilters/utils.ts`, `OrderJobs/partials/JobCard.tsx`, `UploadedFileView/hooks.ts`, `settings/notifications/hooks.ts`, `OrderTemplates/hooks.ts`, `teamMembersContext/provider.tsx`, `services/wise/createRecipient/index.ts`, `customer-portal/.../useSupportDocuments/index.ts` — all `console.error` swallow sites migrated to `reportError` (the 14 sites listed in the PR description).
+- `packages/shared/scripts/nextConfig.js` — Sentry `transpileClientSDK` cleanup (in-scope for the v7→v10 bump).
+- Both `apps/*/package.json` — Sentry version pin to `10.48.0`.
+- All `packages/shared/utils/*Sentry*`, `*throwSentryError*`, `*sentryContext*`, `*sentryScrubber*`, `getSentryRoute`, `installAxiosCorrelationInterceptor`, `createAppQueryClient` — the new error-tracking infrastructure.
+- `packages/shared/components/molecules/AppErrorBoundary/*`, `packages/shared/components/pages/error/*` — error-boundary + SSR error page.
+- `packages/shared/__mocks__/@sentry/nextjs.ts` — v10 mock surface.
+- Both `apps/*/pages/_app.tsx`, `_error.tsx` — boundary + factory wiring.
+
+**Held but unrelated to error tracking:** `TASKS_COMPLETED.md` deletion (-653 lines). User opted to keep it deleted; harmless dev-log purge that can stay in this PR or be carved out later.
+
+**Side fix during cleanup:** the `.bin/prettier → @storybook/cli/…/prettier@2.8.8` symlink was repointed to `node_modules/prettier/bin/prettier.cjs` (v3.5.3) locally so the pre-commit hook would stop fighting the v3-style revert. This change is in `node_modules/` (gitignored) so it does not ship with the PR — but a follow-up is warranted to either bump the storybook dep or remove the conflicting copy at the project level. Until that happens, any dev who reformats these files via `yarn format` on a fresh `yarn install` will accidentally re-introduce the v2-style noise.
 
 ---
 
