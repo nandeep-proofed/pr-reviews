@@ -20,7 +20,7 @@
 | 4. Resolve `@types/node` version mismatch across packages | Both apps pin `@types/node: ^20` (was `18.7.6` in creative) | ✅ Addressed |
 | 5. All packages must build and test successfully | Build now **passes 4/4** after the file-type fix (`e4460091f`); shared has 1 locale-driven test failure (env, not code) | ✅ Addressed (post-fix) |
 
-**Scope note:** The PR is otherwise well-contained to tooling/config/type changes. It does pull in two functional package upgrades (swiper 8→11, react-toastify 9→10), a file-type rework, and an iron-session v6→v8 auth-library upgrade — all justified by the bundler-resolution change but they expand the blast radius and require manual QA.
+**Scope note:** The PR is otherwise well-contained to tooling/config/type changes. It does pull in functional package upgrades (swiper 8→11, react-toastify 9→10, **iron-session 6→8**), a file-type rework, and a date-fns/date-fns-tz major bump — all justified by the bundler-resolution change but they expand the blast radius and require manual QA.
 
 ---
 
@@ -31,7 +31,7 @@ The core change is sound and well-reasoned: `moduleResolution: "node" → "bundl
 - **react-toastify 9→10** (`Toast` atoms/molecules, wysiwyg Toast): `toastify.TYPE.*` enums → string literals (`"success"`, `"error"`, …) and `toast.POSITION.BOTTOM_LEFT → "bottom-left"`. Correct for v10's API. ✅
 - **swiper 8→11** (`OrderJobs`): `Mousewheel` moved from `"swiper"` → `"swiper/modules"`. Correct for v11. ✅ (needs visual QA — 3 majors.)
 - **file-type rework** (`processWorkItemContentWithMetadata`): `fileTypeFromFile(path)` → header-only read (`openSync`/`readSync` first 4100 bytes) + `fileTypeFromBuffer`. The header-only approach is actually a memory improvement over the whole-file read described in the PR body. ✅ logic — but see Issue 1 for the packaging fallout.
-- **iron-session 6→8**: full API migration (`withIronSessionApiRoute`/`withIronSessionSsr` → `getIronSession`); see Issue 5 for the breakdown and the deploy-time verifications.
+- **iron-session 6→8**: full API migration (`withIronSessionApiRoute`/`withIronSessionSsr` → `getIronSession`); see Issue 5 and **Appendix A** for the per-file breakdown and deploy-time verifications.
 - **tsconfig `paths`** migration is complete (typecheck passes across all 5 workspaces, proving every alias import resolves).
 - **husky 8→9** (`7d9fd501b`): `prepare: "husky install"` → `"husky"`, and `.husky/pre-commit` drops the now-deprecated v8 boilerplate (`#!/usr/bin/env sh` + `. "$(dirname -- "$0")/_/husky.sh"`), leaving just `yarn lint-staged`. Correct for v9 — the sourcing line is deprecated in v9 and removed in v10; the hook still runs lint-staged. ✅
 
@@ -137,7 +137,7 @@ Then re-verify Sentry still initializes and reports.
 | auto-augmented `http.IncomingMessage.session` | manually re-added (v8 dropped the automatic augmentation) | ✅ |
 | all page/api call sites | use v8 `getIronSession<IronSessionData>(req, res, sessionOptions)` | ✅ |
 
-All `iron-session/next` / `withIronSessionApiRoute` / `withIronSessionSsr` imports are gone, and **typecheck passes 5/5**, so the type side is sound. The runtime assignment (`req.session = await getIronSession(...)`) is present everywhere the augmented `req.session` type is read. **Mechanically, this is a clean, correct migration.**
+All `iron-session/next` / `withIronSessionApiRoute` / `withIronSessionSsr` imports are gone, and **typecheck passes 5/5**, so the type side is sound. The runtime assignment (`req.session = await getIronSession(...)`) is present everywhere the augmented `req.session` type is read. **Mechanically, this is a clean, correct migration.** A full file-by-file audit + test results is in **Appendix A**.
 
 **Action items (not code defects):**
 
@@ -179,7 +179,7 @@ The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `e
 
 - ✅ Typecheck green across all 5 workspaces under TS 6.0.2 — strong signal the config migration is correct.
 - ✅ creative-portal (1660), customer-portal (335), and wysiwyg (245 + 4 skipped) unit suites pass; shared 1236/1237 (the 1 failure is the locale artifact below).
-- ⚠️ The PR adds no new automated tests, but as a tooling/config upgrade the existing suites are the appropriate coverage. Acceptable for this ticket type.
+- ⚠️ The PR adds no new automated tests, but as a tooling/config upgrade the existing suites are the appropriate coverage. Acceptable for this ticket type. Note: the iron-session migration files have no *direct* unit coverage — see Appendix A.
 - ⚠️ The single shared test failure is environment/locale, not code — but worth pinning `Intl` locale (`en-US`) in `formatWordQuantity` or its test setup so it is deterministic across dev machines (pre-existing on develop; track separately).
 - ✅ **Build now passes (4/4)** after the file-type fix. The PR's own manual test items (Toast, Swiper carousel, file upload + mime detection, Google Picker, Sentry, **auth/login** for iron-session v8) remain unchecked and must be exercised — file upload/mime detection and auth especially.
 
@@ -190,8 +190,8 @@ The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `e
 | Aspect | Status |
 |---|---|
 | Correctness | ✅ Config/type migration is sound; build blocker fixed; iron-session v6→v8 migrated correctly; Sentry + Storybook reqs deferred to separate tickets by decision |
-| Regression risk | ⚠️ Medium — swiper (3 majors), react-toastify (1 major), iron-session (2 majors, may force one-time re-login) need QA; bundler resolution can surface more raw-ESM packages |
-| Tests | ⚠️ Suites pass except 1 locale-env failure; no new tests (acceptable for tooling) |
+| Regression risk | ⚠️ Medium — swiper (3 majors), react-toastify (1 major), iron-session (2 majors, may force one-time re-login), date-fns/date-fns-tz major bump (timezone math) need QA; bundler resolution can surface more raw-ESM packages |
+| Tests | ⚠️ Suites pass except 1 locale-env failure; no new tests (acceptable for tooling); auth-migration files covered indirectly only (Appendix A) |
 | Code quality | ✅ Clean, well-documented migrations |
 | Validation suite | ✅ `build` 4/4 + `typecheck` 5/5; remaining `lint`/`test` failures are pre-existing on develop (out of scope) |
 | Mergeable state | ✅ Builds clean; no open blockers (Sentry/Storybook deferred by decision; iron-session needs pre-deploy verification, not a merge blocker) |
@@ -205,8 +205,45 @@ The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `e
 1. ✅ **Done — Blocker (Issue 1):** `packages/shared` file-type aligned to `19.6.0`; `npx turbo run build` green for both portals.
 2. ⏸️ **Deferred (Issue 2 — Sentry req #3):** `transpileClientSDK: false` deferred to a separate ticket. Housekeeping: correct the PR description, which claims `false` while the code is still `true`.
 3. ⏸️ **Deferred (Issue 3 — Storybook req #2):** creative-portal alpha alignment deferred to a separate ticket. Update the Jira scope so req #2 is formally tracked rather than silently dropped.
-4. **iron-session v6→v8 (Issue 5):** migration code is correct and type-checks, but (a) correct the PR description, which wrongly claims no v8 upgrade; (b) verify before deploy that existing sessions degrade gracefully (likely one-time forced re-login due to the v6→v8 cookie seal-format change) and that `SECRET_COOKIE_PASSWORD` is ≥ 32 chars in every environment.
+4. **iron-session v6→v8 (Issue 5 + Appendix A):** migration code is correct and type-checks, but (a) correct the PR description, which wrongly claims no v8 upgrade; (b) verify before deploy that existing sessions degrade gracefully (likely one-time forced re-login due to the v6→v8 cookie seal-format change) and that `SECRET_COOKIE_PASSWORD` is ≥ 32 chars in every environment.
 5. **Before merge, run the PR's manual QA checklist** — Toast (all 4 types + maintenance banner), OrderJobs swiper carousel, customer-portal file upload + mime detection, Google Picker, Sentry reporting, **and an auth/login round-trip** (iron-session v8).
 6. **Track separately (not blockers, pre-existing on develop):** the `wysiwyg` prettier lint errors and the `formatWordQuantity` locale-dependent test. Optional cleanup: drop the now-unused `file-type` declaration from `apps/customer-portal/package.json` (Issue 4).
 
 _Note: this branch carries a fresh `develop` merge (`7cf739c1c`) that was resolved prior to review, plus the file-type build fix (`e4460091f`). The original build failure was independent of the merge — file-type `^22` predated it (commit `02be61c37`)._
+
+---
+
+## Appendix A — iron-session v6→v8 full file audit
+
+**Driver:** iron-session `^6.1.3 → ^8.0.4` (commit `12e194176`). 22 code/type files + 3 `package.json` + `yarn.lock`. Grouped by change-pattern (the patterns repeat across files).
+
+| Group | Files | What & why | Correct? |
+|---|---|---|---|
+| **A. Dependency** | `apps/{creative,customer}-portal/package.json`, `packages/shared/package.json`, `yarn.lock` | `iron-session ^6.1.3 → ^8.0.4`; added to customer-portal + shared (were hoisting) | ✅ resolves 8.0.4; build/typecheck green |
+| **B. Options** | `packages/shared/lib/session.ts` | `IronSessionOptions` → `SessionOptions` (v8 rename); values unchanged | ✅ behavior-identical |
+| **C. Type augmentation (×3)** | `packages/shared/@types/session.ts`, `apps/{creative,customer}-portal/@types/session.ts` | re-add `http.IncomingMessage.session` (v6 auto-augmented, v8 dropped it) | ✅ restores v6 typing |
+| **D. Type generics (×4)** | `packages/shared/api/types/authenticatedNextApiRequest.ts`, `apps/{creative,customer}-portal/api/types/authenticatedNextApiRequest.ts`, `packages/shared/.../withApiMiddleware/types.ts` | `IronSession` → `IronSession<IronSessionData>`; `IronSession["user"]` → `IronSessionData["user"]` (v8 made `IronSession` generic) | ✅ v8-accurate |
+| **E. API middleware** | `packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts` | `withIronSessionApiRoute` → manual `req.session = await getIronSession(req,res,opts)` wrapper | ✅ canonical v8 pattern |
+| **F. SSR enhancers (×4)** | `apps/{creative,customer}-portal/api/enhancers/withUserProvided/{index.ts,utils.ts}` | `withIronSessionSsr` → inline `getIronSession`; re-attaches `context.req.session = session`; `user` passed explicitly into `handleCustomHandler` | ✅ equivalent, cleaner |
+| **G. API routes (×2)** | `apps/creative-portal/pages/api/user.ts`, `apps/{creative,customer}-portal/pages/api/logout.ts` | HOC → default-export handler + inline `getIronSession`; `session.destroy()` / `session.user` | ✅ v8 `destroy()` writes clear-cookie header synchronously |
+| **H. SSR pages (×5)** | `apps/{creative,customer}-portal/pages/log-in.tsx`, `apps/{creative,customer}-portal/pages/settings/reset-password.tsx`, `apps/customer-portal/components/pages/home/index.tsx` | `withIronSessionSsr` → plain `getServerSideProps` (typed `GetServerSidePropsContext`) + inline `getIronSession`; read-only, no `save()` needed | ✅ correct |
+| **I. Adjacent (not iron-session)** | `apps/customer-portal/api/trustBrowser/trustBrowser.ts` | only change is the **cookie** import (`import cookie` → `import { serialize as serializeCookie }`, part of the `dc1945056` default-import crash fix); `req.session.user.id` read unchanged | ✅ cookie named-import fix |
+
+### Test results (session-touching tests)
+
+| Workspace | Test files | Tests | Pass | Fail |
+|---|---|---|---|---|
+| shared (`resetSms`, `TrustBrowserModal`) | 2 | 12 | 12 | 0 |
+| creative-portal (`lib/session.test.ts` + 10 session-mocking integration tests) | 11 | 79 | 79 | 0 |
+| customer-portal (`usageReportData`, `getProjects`, `phone-verify`) | 3 | 13 | 13 | 0 |
+| **TOTAL** | **16** | **104** | **104 ✅** | **0** |
+
+### Coverage caveat & risk (honest)
+
+**Code-level: correct and consistent** across all 22 files — every v6 entry point is removed, types/middleware/enhancers/routes/pages follow the canonical v8 pattern, typecheck 5/5 + build 4/4 + the 104 session-touching tests all green.
+
+**But not zero-risk:**
+- **Test coverage of the migration itself is thin.** The 104 tests **mock the session** and exercise *downstream* logic — they prove the session *contract/shape* is intact, not the runtime auth flow. The migrated files (`withApiMiddleware`, `withUserProvided`, `pages/api/*`, SSR pages, trustBrowser) have **no direct unit tests**; `lib/session.test.ts` only asserts cookie-lifetime constants. So runtime-auth correctness rests on typecheck + manual QA.
+- **Two deploy-time verifications remain** (see Issue 5 items 2–3): v6→v8 cookie seal-format change → likely one-time forced re-login; `SECRET_COOKIE_PASSWORD` ≥ 32 chars in every env.
+
+**Manual QA to close the gap:** login (session set), logout (`destroy()` clears cookie + redirect), MFA (`/api/user` returns null when `mfaVerified === false`), idle/expiry logout, maintenance-mode destroy+redirect, trust-browser cookie set, and confirm a v6-era cookie degrades to a clean re-login (not an error).
