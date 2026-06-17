@@ -20,7 +20,7 @@
 | 4. Resolve `@types/node` version mismatch across packages | Both apps pin `@types/node: ^20` (was `18.7.6` in creative) | ✅ Addressed |
 | 5. All packages must build and test successfully | Build now **passes 4/4** after the file-type fix (`e4460091f`); shared has 1 locale-driven test failure (env, not code) | ✅ Addressed (post-fix) |
 
-**Scope note:** The PR is otherwise well-contained to tooling/config/type changes. It does pull in two functional package upgrades (swiper 8→11, react-toastify 9→10) and a file-type rework that are justified by the bundler-resolution change but expand the blast radius and require manual QA.
+**Scope note:** The PR is otherwise well-contained to tooling/config/type changes. It does pull in two functional package upgrades (swiper 8→11, react-toastify 9→10), a file-type rework, and an iron-session v6→v8 auth-library upgrade — all justified by the bundler-resolution change but they expand the blast radius and require manual QA.
 
 ---
 
@@ -31,6 +31,7 @@ The core change is sound and well-reasoned: `moduleResolution: "node" → "bundl
 - **react-toastify 9→10** (`Toast` atoms/molecules, wysiwyg Toast): `toastify.TYPE.*` enums → string literals (`"success"`, `"error"`, …) and `toast.POSITION.BOTTOM_LEFT → "bottom-left"`. Correct for v10's API. ✅
 - **swiper 8→11** (`OrderJobs`): `Mousewheel` moved from `"swiper"` → `"swiper/modules"`. Correct for v11. ✅ (needs visual QA — 3 majors.)
 - **file-type rework** (`processWorkItemContentWithMetadata`): `fileTypeFromFile(path)` → header-only read (`openSync`/`readSync` first 4100 bytes) + `fileTypeFromBuffer`. The header-only approach is actually a memory improvement over the whole-file read described in the PR body. ✅ logic — but see Issue 1 for the packaging fallout.
+- **iron-session 6→8**: full API migration (`withIronSessionApiRoute`/`withIronSessionSsr` → `getIronSession`); see Issue 5 for the breakdown and the deploy-time verifications.
 - **tsconfig `paths`** migration is complete (typecheck passes across all 5 workspaces, proving every alias import resolves).
 - **husky 8→9** (`7d9fd501b`): `prepare: "husky install"` → `"husky"`, and `.husky/pre-commit` drops the now-deprecated v8 boilerplate (`#!/usr/bin/env sh` + `. "$(dirname -- "$0")/_/husky.sh"`), leaving just `yarn lint-staged`. Correct for v9 — the sourcing line is deprecated in v9 and removed in v10; the hook still runs lint-staged. ✅
 
@@ -118,6 +119,34 @@ Then re-verify Sentry still initializes and reports.
 
 **Resolution:** Both now resolve to `19.6.0` after the Issue 1 fix. Note: `apps/customer-portal` still *declares* `file-type: 19.6.0` but imports it nowhere (dead dependency, re-introduced by the develop merge — commit `02be61c37` had originally removed it). Optional follow-up: drop the unused line from `apps/customer-portal/package.json`. Left in place for now per author preference.
 
+### 5. iron-session v6→v8 migration — code correct, but PR description wrong + 2 deploy-time verifications
+
+**[File: packages/shared/lib/session.ts, packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts, `@types/session.ts` (×3), `withUserProvided` enhancers, page/api session call sites]**
+
+**Function/Class:** iron-session session handling
+
+**Severity:** low (migration is correct; items below are a description fix + pre-deploy verification, not code defects)
+
+**Context:** Despite the PR description stating *"No iron-session v8 upgrade (not needed once moduleResolution changed)"*, the PR **does** upgrade iron-session `^6.1.3 → ^8.0.4` across creative-portal, customer-portal, and shared (commit `12e194176`, "Upgrade iron-session from v6 to v8"). The v6→v8 API migration is done properly:
+
+| v6 (before) | v8 (after) | Correct? |
+|---|---|---|
+| `IronSessionOptions` | `SessionOptions` (renamed in v8) | ✅ |
+| `withIronSessionApiRoute(handler, opts)` from `iron-session/next` | manual `req.session = await getIronSession(req, res, opts)` wrapper in `withApiMiddleware` | ✅ |
+| `withIronSessionSsr` | manual `getIronSession(ctx.req, ctx.res, opts)` + `ctx.req.session = session` in `withUserProvided` enhancers | ✅ |
+| auto-augmented `http.IncomingMessage.session` | manually re-added (v8 dropped the automatic augmentation) | ✅ |
+| all page/api call sites | use v8 `getIronSession<IronSessionData>(req, res, sessionOptions)` | ✅ |
+
+All `iron-session/next` / `withIronSessionApiRoute` / `withIronSessionSsr` imports are gone, and **typecheck passes 5/5**, so the type side is sound. The runtime assignment (`req.session = await getIronSession(...)`) is present everywhere the augmented `req.session` type is read. **Mechanically, this is a clean, correct migration.**
+
+**Action items (not code defects):**
+
+1. **Correct the PR description** — it denies the v8 upgrade that the code actually performs. Reviewers/QA need to know a major auth-library bump is in scope.
+
+2. **Verify before deploy — existing sessions may be invalidated.** iron-session changed its cookie seal format between v6 (`@hapi/iron`) and v7+/v8; a v6-sealed cookie generally cannot be unsealed by v8, so already-logged-in users will likely be **forced to re-login once** after deploy. Not data loss, but call it out in release notes and QA (log in on current prod → deploy → confirm graceful re-login, not an error).
+
+3. **Verify before deploy — `password` length.** v8 hard-requires `SECRET_COOKIE_PASSWORD` ≥ 32 chars and throws at the first `getIronSession` call otherwise. v6 had the same minimum (so prod is *probably* fine), but since it's env-driven (`process.env.SECRET_COOKIE_PASSWORD`, not in-repo), confirm no environment (dev/test/staging/prod) has a secret under 32 chars.
+
 ---
 
 ## Validation Checks
@@ -152,7 +181,7 @@ The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `e
 - ✅ creative-portal (1660), customer-portal (335), and wysiwyg (245 + 4 skipped) unit suites pass; shared 1236/1237 (the 1 failure is the locale artifact below).
 - ⚠️ The PR adds no new automated tests, but as a tooling/config upgrade the existing suites are the appropriate coverage. Acceptable for this ticket type.
 - ⚠️ The single shared test failure is environment/locale, not code — but worth pinning `Intl` locale (`en-US`) in `formatWordQuantity` or its test setup so it is deterministic across dev machines (pre-existing on develop; track separately).
-- ✅ **Build now passes (4/4)** after the file-type fix. The PR's own manual test items (Toast, Swiper carousel, file upload + mime detection, Google Picker, Sentry) remain unchecked and must be exercised — file upload/mime detection especially, since that path now bundles file-type 19.x rather than the previously-failing 22.x.
+- ✅ **Build now passes (4/4)** after the file-type fix. The PR's own manual test items (Toast, Swiper carousel, file upload + mime detection, Google Picker, Sentry, **auth/login** for iron-session v8) remain unchecked and must be exercised — file upload/mime detection and auth especially.
 
 ---
 
@@ -160,12 +189,12 @@ The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `e
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Config/type migration is sound; build blocker fixed; Sentry + Storybook reqs deferred to separate tickets by decision |
-| Regression risk | ⚠️ Medium — swiper (3 majors) + react-toastify (1 major) need visual QA; bundler resolution can surface more raw-ESM packages |
+| Correctness | ✅ Config/type migration is sound; build blocker fixed; iron-session v6→v8 migrated correctly; Sentry + Storybook reqs deferred to separate tickets by decision |
+| Regression risk | ⚠️ Medium — swiper (3 majors), react-toastify (1 major), iron-session (2 majors, may force one-time re-login) need QA; bundler resolution can surface more raw-ESM packages |
 | Tests | ⚠️ Suites pass except 1 locale-env failure; no new tests (acceptable for tooling) |
 | Code quality | ✅ Clean, well-documented migrations |
 | Validation suite | ✅ `build` 4/4 + `typecheck` 5/5; remaining `lint`/`test` failures are pre-existing on develop (out of scope) |
-| Mergeable state | ✅ Builds clean; no open blockers (Sentry/Storybook deferred by decision) |
+| Mergeable state | ✅ Builds clean; no open blockers (Sentry/Storybook deferred by decision; iron-session needs pre-deploy verification, not a merge blocker) |
 
 ---
 
@@ -176,7 +205,8 @@ The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `e
 1. ✅ **Done — Blocker (Issue 1):** `packages/shared` file-type aligned to `19.6.0`; `npx turbo run build` green for both portals.
 2. ⏸️ **Deferred (Issue 2 — Sentry req #3):** `transpileClientSDK: false` deferred to a separate ticket. Housekeeping: correct the PR description, which claims `false` while the code is still `true`.
 3. ⏸️ **Deferred (Issue 3 — Storybook req #2):** creative-portal alpha alignment deferred to a separate ticket. Update the Jira scope so req #2 is formally tracked rather than silently dropped.
-4. **Before merge, run the PR's manual QA checklist** — Toast (all 4 types + maintenance banner), OrderJobs swiper carousel, customer-portal file upload + mime detection, Google Picker, Sentry reporting.
-5. **Track separately (not blockers, pre-existing on develop):** the `wysiwyg` prettier lint errors and the `formatWordQuantity` locale-dependent test. Optional cleanup: drop the now-unused `file-type` declaration from `apps/customer-portal/package.json` (Issue 4).
+4. **iron-session v6→v8 (Issue 5):** migration code is correct and type-checks, but (a) correct the PR description, which wrongly claims no v8 upgrade; (b) verify before deploy that existing sessions degrade gracefully (likely one-time forced re-login due to the v6→v8 cookie seal-format change) and that `SECRET_COOKIE_PASSWORD` is ≥ 32 chars in every environment.
+5. **Before merge, run the PR's manual QA checklist** — Toast (all 4 types + maintenance banner), OrderJobs swiper carousel, customer-portal file upload + mime detection, Google Picker, Sentry reporting, **and an auth/login round-trip** (iron-session v8).
+6. **Track separately (not blockers, pre-existing on develop):** the `wysiwyg` prettier lint errors and the `formatWordQuantity` locale-dependent test. Optional cleanup: drop the now-unused `file-type` declaration from `apps/customer-portal/package.json` (Issue 4).
 
 _Note: this branch carries a fresh `develop` merge (`7cf739c1c`) that was resolved prior to review, plus the file-type build fix (`e4460091f`). The original build failure was independent of the merge — file-type `^22` predated it (commit `02be61c37`)._
