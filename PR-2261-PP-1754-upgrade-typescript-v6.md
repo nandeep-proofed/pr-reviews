@@ -125,7 +125,7 @@ Then re-verify Sentry still initializes and reports.
 |---|---|---|
 | `npx turbo run test` | ❌ | 1 failure: `@proofed/shared` `formatWordQuantity.test.ts` expects `1,000,000` but got `10,00,000`. **Locale-driven** — the runner's locale is `en_IN`; the test passes 9/9 under `en_US` (CI/UTC), and the file is identical to develop. Not a code regression. creative-portal **1660/1660** ✅, customer-portal **335/335** ✅ |
 | `npx turbo run typecheck` | ✅ | 5/5 workspaces, 0 errors |
-| `npx turbo run lint` | ❌ | 63 `prettier/prettier` errors in `@proofed/wysiwyg-editor` (`src/extensions/comments/*`). **Pre-existing on develop** — those files are byte-identical to develop; the PR/merge did not touch them. The 4 merge-resolution files lint clean. Out of PR scope. |
+| `npx turbo run lint` | ❌ | 63 `prettier/prettier` (formatting-only) errors in `@proofed/wysiwyg-editor`, across **5 files**: `components/molecules/AiChangeBox/index.tsx`, `components/molecules/CommentsContainer/utils.ts` + `formatIndividualDiffs.test.ts`, `contexts/EditorContext/hooks.ts`, `extensions/comments/index.ts`. **Pre-existing on develop** — all 5 files are byte-identical to develop **and** the lint toolchain is unchanged by the PR (`prettier ^3.2.5`, `eslint ^8.56.0`, `eslint-plugin-prettier ^5.1.3`), so develop produces the same 63 errors. The PR/merge did not touch them; auto-fixable via `--fix`. Out of PR scope. |
 | `npx turbo run build` | ✅ | **4/4 workspaces pass** after the file-type fix (`e4460091f`). Both customer-portal and creative-portal build clean. (Was ❌ on `7cf739c1c` — Issue 1.) |
 
 ---
