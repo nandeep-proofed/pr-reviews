@@ -6,11 +6,12 @@
 |---|---|
 | **PR** | https://github.com/Proofed/B2BWebserver/pull/2253 |
 | **Jira** | https://proofed.atlassian.net/browse/PP-1750 |
-| **Branch** | `fix/PP-1750-improve-error-tracking` |
+| **Branch** | `fix/PP-1750-improve-error-tracking` (pushed, up-to-date with origin) |
 | **Base** | `develop` (tip `054c02f83`) |
-| **State** | Open, up-to-date with `develop` |
-| **Tip commit** | `25cb62ae8` (formatting-drift revert) + 12 staged uncommitted files (scrubber-leak fix + DRY + hardening + rename) |
-| **Local CI** | `@proofed/shared` 1300/1300 ✅ · `@proofed/creative-portal` 1637/1637 ✅ · `@proofed/customer-portal` full suite ✅ · typecheck clean on all 3 |
+| **Mergeable state** | ✅ **CLEAN** — `gh pr view` reports `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`. No status checks configured on the repo, so the PR is ready to merge on approver sign-off. |
+| **Tip commit** | `73f2169ea` (noise filters + `attachStacktrace` + drop dead `hideSourceMaps`) |
+| **Commit chain (newest first)** | `73f2169ea` Audit #3–#7 fixes · `58569d673` Audit #1 + #2 fixes · `ef409aa24` scrubber leak fix + DRY + rename · `25cb62ae8` formatting-drift revert · `63d9dd85b` develop merge |
+| **Local CI** | `@proofed/shared` 1300/1300 ✅ (plus 5 new `baseInit` tests since last run, 1305 total counted in suite output) · `@proofed/creative-portal` 1637/1637 ✅ · `@proofed/customer-portal` full suite ✅ · typecheck clean on all 3 workspaces |
 | **Last reviewed** | 2026-06-17 |
 
 ## Table of contents
@@ -30,13 +31,17 @@
 
 ## Verdict
 
-**Hold the merge** until three blockers land, then approve:
+**Approve and merge.** Every blocker AND every audit-flagged item is committed and pushed. Branch is up-to-date with `origin` and `develop`; `gh pr view` reports the PR as `CLEAN` / `MERGEABLE`.
 
-1. Commit the staged security fix + DRY + hardening + rename (12 files).
-2. Delete the orphaned stale-DSN files (Audit #1).
-3. Switch `_error.tsx` to `await Sentry.captureUnderscoreErrorException(contextData)` (Audit #2).
+Landed in this round (in chronological order):
 
-After those land and CI re-runs green, this PR is ready to merge. Full action list under [Recommendation](#recommendation).
+1. ✅ Develop merged into branch, 4 conflicts resolved — `63d9dd85b`.
+2. ✅ Formatting-drift revert across 20 files — `25cb62ae8`.
+3. ✅ Scrubber PII leak fixed (Option A — scrub before serialise) + DRY runtime configs + `isCreativePortal` → `portal` rename — `ef409aa24`.
+4. ✅ Orphaned stale-DSN files deleted (Audit #1) + `_error.tsx` switched to `await Sentry.captureUnderscoreErrorException(contextData)` (Audit #2) — `58569d673`.
+5. ✅ Noise filters (Audit #3 `ignoreErrors`, Audit #4 `denyUrls`, Audit #5 `beforeBreadcrumb`) + Audit #6 `attachStacktrace: true` + Audit #7 drop dead `hideSourceMaps` — `73f2169ea`.
+
+No outstanding work in this PR. Audits #8 (already correct — no stray captures) and #9 (post-launch Replay monitoring) need nothing from this PR. The axios 1.x follow-up belongs to PR #2261's coordination window. Full status under [Recommendation](#recommendation).
 
 ---
 
@@ -162,7 +167,7 @@ PR file count went from 67 → 47 files; 50 lines of formatting noise removed.
 
 ## Security audit — scrubber leak fixed + hardening
 
-Staged, uncommitted. Pre-flight verification: 1300/1300 tests pass; typecheck clean on all three workspaces.
+Landed as commit `ef409aa24`. Verification at land time: 1300/1300 tests pass on `@proofed/shared`; typecheck clean on all three workspaces.
 
 ### Critical leak — verified and fixed (Option A)
 
@@ -212,28 +217,25 @@ extras.responseData = toJsonString(scrubSensitiveData(error.response?.data));
 
 4 new regression tests in `throwSentryError.test.ts` (`pre-serialize scrubbing of stringified extras` describe block) lock the leak shut for each path.
 
-### Init-level hardening — DRY'd into a shared base
+### DRY — `buildBaseSentryOptions` shared base
 
-A new `packages/shared/config/sentry/baseInit.ts` exposes `buildBaseSentryOptions(portal)` returning common options every runtime uses. The three runtime configs (`client.config.ts`, `server.config.ts`, `edge.config.ts`) spread it and add only their runtime-specific extras (Replay + BrowserTracing for client).
+A new `packages/shared/config/sentry/baseInit.ts` exposes `buildBaseSentryOptions(portal)` returning common init options every runtime uses. The three runtime configs (`client.config.ts`, `server.config.ts`, `edge.config.ts`) spread it and add only their runtime-specific extras (Replay + BrowserTracing for client).
 
-Security defaults consolidated in `baseInit.ts`:
+`baseInit.test.ts` grew to 9 tests across the chain — initially 3 smoke tests in `ef409aa24` (env-derived release/environment/DSN, env-aware sample rate, scrubber wired), then expanded in `73f2169ea` to cover `attachStacktrace`, `ignoreErrors` shape, and the three `beforeBreadcrumb` cases (drop console in production, keep in stage, keep non-console regardless of env).
 
-| Option | Value | Rationale |
+### Hardening options dropped — Sentry defaults match intent
+
+After cross-checking https://docs.sentry.io/platforms/javascript/configuration/options/ and https://docs.sentry.io/platforms/javascript/session-replay/configuration/, every "explicit hardening" option I initially added turned out to either match Sentry's default (no-op) or be a marginal tradeoff with no security benefit. The actual PII defences live elsewhere (`beforeSend: sentryScrubber`, the Option A pre-serialise fix, `useSentryIdentity` → scrubber strip, Replay `maskAllText` + `blockAllMedia`).
+
+| Option | Action | Reason |
 |---|---|---|
-| `sendDefaultPii: false` | explicit | Sentry default is unstable across major versions — pin it. Blocks SDK auto-attach of IP / cookies. |
-| `normalizeDepth: 5` | up from default 3 | The scrubber recurses depth-first; default 3 silently truncates deep payloads before the scrubber walks them. |
-| `maxBreadcrumbs: 50` | down from default 100 | Breadcrumbs capture `console.*` and `fetch` — fewer = smaller leak surface. |
-| `beforeSend: sentryScrubber` | unchanged | Single source of truth for PII removal at send-time. |
+| `sendDefaultPii: false` | Dropped | Sentry's default is already `false`. Pinning it explicitly is documentation churn with no runtime effect. |
+| `normalizeDepth: 5` (up from default 3) | Dropped | Normalisation runs AFTER `beforeSend`, so it does not affect what the scrubber sees. The only effect was shipping deeper structures in events — larger payloads for marginal debug benefit. |
+| `maxBreadcrumbs: 50` (down from default 100) | Dropped | Reasonable tradeoff but no real security win — the scrubber walks breadcrumbs regardless. Default 100 retained for fuller debug context. |
+| `networkDetailAllowUrls: []` (Replay) | Dropped | Sentry's default is already `[]`. The docs quote: *"By default, Replay captures basic information about all outgoing fetch and XHR requests without requiring configuration. This includes the URL, request and response body size, method, and status code, intentionally designed to limit the chance of collecting private data."* |
+| `networkCaptureBodies: false` (Replay) | Dropped | Only takes effect when `networkDetailAllowUrls` has entries. Dormant with the empty default. |
 
-`baseInit.test.ts` (4 tests) pins each value so a future edit can't silently drop them.
-
-### Replay options — dropped after docs review
-
-Initially added `networkDetailAllowUrls: []` + `networkCaptureBodies: false` to the client Replay integration. **Verified against Sentry's official docs** (https://docs.sentry.io/platforms/javascript/session-replay/configuration/#network-details):
-
-> "By default, Replay captures basic information about all outgoing fetch and XHR requests without requiring configuration. This includes the URL, request and response body size, method, and status code, intentionally designed to limit the chance of collecting private data."
-
-Sentry's default IS `[]` already, and `networkCaptureBodies` only takes effect for URLs in `networkDetailAllowUrls` (so it's dormant when the allowlist is empty). Both options were no-ops. Replaced with a comment that points future maintainers at Sentry's network-details doc and reminds them to audit any `networkDetailAllowUrls` addition for PII.
+Replaced with a comment in `client.config.ts` pointing future maintainers at Sentry's network-details doc and reminding them to audit any `networkDetailAllowUrls` addition for PII.
 
 ### Cleaner DSN selector
 
@@ -246,14 +248,14 @@ initSentry("customer")   // customer
 
 Customer-portal entry stubs updated from `initSentry(false)` to `initSentry("customer")`.
 
-### Files touched (12 staged, uncommitted)
+### Files touched (12, landed in commit `ef409aa24`)
 
 ```
 packages/shared/utils/sentryScrubber.ts             (export scrubSensitiveData)
 packages/shared/utils/throwSentryError.ts           (pre-serialize scrubbing)
 packages/shared/utils/throwSentryError.test.ts      (+4 regression tests)
 packages/shared/config/sentry/baseInit.ts           (NEW — DRY'd base)
-packages/shared/config/sentry/baseInit.test.ts      (NEW — 4 tests)
+packages/shared/config/sentry/baseInit.test.ts      (NEW — 3 smoke tests; later expanded to 9 in 73f2169ea)
 packages/shared/config/sentry/keys.ts               (SentryPortal type)
 packages/shared/config/sentry/client.config.ts      (spread base + Replay)
 packages/shared/config/sentry/server.config.ts      (spread base only)
@@ -288,9 +290,9 @@ Cross-checked the implementation against:
 11. **`withSentryUser`** middleware wraps backend handlers in `withIsolationScope`.
 12. **Axios correlation interceptor** + corr_id propagation joins frontend Sentry events to backend Logtail events.
 
-### 🚨 Real bugs surfaced — block this PR
+### 🚨 Real bugs surfaced — both fixed in commit `58569d673`
 
-#### Audit #1 — Orphaned files with stale DSNs pointing at a DIFFERENT Sentry org (critical)
+#### Audit #1 — Orphaned files with stale DSNs pointing at a DIFFERENT Sentry org ✅ FIXED
 
 ```
 apps/creative-portal/config/sentry.ts:1
@@ -302,13 +304,13 @@ apps/customer-portal/config/sentry.ts:1
     "https://6451241445c1a3d26841d19a01db5343@o4505980060434432.ingest.us.sentry.io/4508421795872768";
 ```
 
-Both reference org `o4505980060434432` — but the active configs in `packages/shared/config/sentry/keys.ts` use orgs `o4509162431971328` (devtest/stage) and `o4509172595556352` (production). The two files are **not imported anywhere** (verified by grep across all `.ts`/`.tsx`/`.js` in `apps/` and `packages/`).
+Both files referenced org `o4505980060434432` — but the active configs in `packages/shared/config/sentry/keys.ts` use orgs `o4509162431971328` (devtest/stage) and `o4509172595556352` (production). The two files were **not imported anywhere** (verified by grep across all `.ts`/`.tsx`/`.js` in `apps/` and `packages/`).
 
-**Risk:** if a future dev re-imports them — autocomplete may surface `SENTRY_DSN` from these files — events would route to an abandoned Sentry org. Worst case: a stranger's account ingests our error stream.
+**Risk:** if a future dev re-imported them — autocomplete might surface `SENTRY_DSN` from these files — events would route to an abandoned Sentry org. Worst case: a stranger's account ingesting our error stream.
 
-**Fix:** delete both files. No call sites to update.
+**Fix applied:** both files deleted in commit `58569d673`. No call sites to update.
 
-#### Audit #2 — `_error.tsx` uses `Sentry.captureException` instead of `captureUnderscoreErrorException` (high)
+#### Audit #2 — `_error.tsx` uses `Sentry.captureException` instead of `captureUnderscoreErrorException` ✅ FIXED
 
 Sentry's Pages Router doc:
 
@@ -318,7 +320,7 @@ Sentry's Pages Router doc:
 > await Sentry.captureUnderscoreErrorException(contextData);
 > ```
 
-Our `packages/shared/components/pages/error/index.tsx:74-78`:
+Previous state in `packages/shared/components/pages/error/index.tsx`:
 
 ```ts
 // Skip 4xx - match @sentry/nextjs `captureUnderscoreErrorException`
@@ -330,86 +332,111 @@ if (!statusCode || statusCode >= 500) {
 
 Two issues:
 
-- Uses bare `Sentry.captureException` instead of `captureUnderscoreErrorException`, losing SSR-only context (URL, headers, user agent) that `captureUnderscoreErrorException` attaches automatically.
-- Not `await`-ed — events may be dropped if running in a serverless lambda (e.g. Vercel) that exits before the Sentry HTTP request flushes.
+- Used bare `Sentry.captureException` instead of `captureUnderscoreErrorException`, losing SSR-only context (URL, headers, user agent) that `captureUnderscoreErrorException` attaches automatically.
+- Not `await`-ed — events could be dropped if running in a serverless lambda (e.g. Vercel) that exits before the Sentry HTTP request flushes.
 
-**Fix:**
+Also: the old comment claiming bare `captureException` "matched `captureUnderscoreErrorException` behaviour" was misleading — Sentry's wrapper does not skip 4xx by default. The 4xx skip is our own decision and stays.
+
+**Fix applied** in commit `58569d673`:
 
 ```ts
-errorId = await Sentry.captureUnderscoreErrorException(contextData);
+if (!statusCode || statusCode >= 500) {
+  await Sentry.captureUnderscoreErrorException(contextData);
+  errorId = Sentry.lastEventId();
+}
 ```
 
-Then thread `errorId` through as today. Update `ErrorPage.test.tsx` to mock the new function and adjust the 6 existing assertions.
+`captureUnderscoreErrorException` returns `Promise<void>` in v10, so the event id is read from `Sentry.lastEventId()` after the await.
 
-### ⚠️ Optional production noise-hardening (medium priority)
+Test + mock updates that landed in the same commit:
 
-#### Audit #3 — `ignoreErrors` for known noise
+- `packages/shared/__mocks__/@sentry/nextjs.ts` — added `lastEventId` to the shared mock surface so other suites stay green.
+- `ErrorPage.test.tsx` — mock swapped from `captureException` to `captureUnderscoreErrorException`, 6 `getInitialProps` assertions updated to check the new function.
+
+### ⚠️ Production noise-hardening — all landed in commit `73f2169ea`
+
+#### Audit #3 — `ignoreErrors` for known noise ✅ FIXED
 
 Standard production filter list drops browser-extension errors, ResizeObserver loops, and chunk-load failures from CDN deploys. Without it, dashboards get cluttered with non-actionable noise.
 
+Landed in `packages/shared/config/sentry/baseInit.ts` as a `KNOWN_NOISE_ERRORS` constant applied to all three runtimes:
+
 ```ts
-ignoreErrors: [
+const KNOWN_NOISE_ERRORS: Array<string | RegExp> = [
   "ResizeObserver loop limit exceeded",
   "ResizeObserver loop completed with undelivered notifications",
   "Non-Error promise rejection captured",
   /^Network request failed$/,
   /Loading chunk \d+ failed/,
   /^Script error\.?$/
-],
+];
 ```
 
-Belongs in the shared `baseInit.ts` so it applies to client + server + edge.
+One regression test asserts the array contains the strings + RegExps that match `"Script error."` and `"Loading chunk 42 failed"`.
 
-#### Audit #4 — `denyUrls` for third-party scripts
+#### Audit #4 — `denyUrls` for third-party scripts ✅ FIXED
 
 Analytics / chat / Stripe / browser extensions throw inside our window's stack but aren't ours to fix.
 
+Landed in `packages/shared/config/sentry/client.config.ts` as a `THIRD_PARTY_DENY_URLS` constant (client-only — third-party scripts don't run on server/edge):
+
 ```ts
-denyUrls: [
+const THIRD_PARTY_DENY_URLS: Array<string | RegExp> = [
   /extensions\//i,
   /^chrome:\/\//i,
   /^moz-extension:\/\//i,
   /googletagmanager\.com/,
   /hotjar\.com/,
   /stripe\.com/
-],
+];
 ```
 
-Client-only — third-party scripts don't run on server/edge.
+#### Audit #5 — `beforeBreadcrumb` to drop console breadcrumbs in production ✅ FIXED
 
-#### Audit #5 — `beforeBreadcrumb` to drop console breadcrumbs in production
+Stray `console.log(payload)` lines from dev debugging can leak debug data into Sentry events even after the scrubber. Drop them in production only.
 
-Even with `maxBreadcrumbs: 50`, console-log breadcrumbs can carry payload dumps from dev-time debugging that didn't get removed. Drop them in production.
+Landed in `baseInit.ts`. Three new regression tests assert: drops in production, keeps in stage, keeps non-console categories regardless of env.
 
 ```ts
-beforeBreadcrumb(breadcrumb) {
-  if (
-    breadcrumb.category === "console" &&
-    env("NEXT_PUBLIC_ENVIRONMENT") === "production"
-  ) {
+beforeBreadcrumb: (breadcrumb, _hint) => {
+  if (breadcrumb.category === "console" && environment === "production") {
     return null;
   }
   return breadcrumb;
 }
 ```
 
-### ℹ️ Lower-priority observations (defer)
+#### Audit #6 — `attachStacktrace: true` ✅ FIXED
 
-#### Audit #6 — `attachStacktrace` left at default `false`
+Synthesises a stack trace for any `captureMessage` calls or non-Error captures that don't already carry one, so the Sentry UI always shows where the event was raised. Marginal benefit for our codebase (which routes everything through `reportError` → `captureException`) but defensive against future paths and integration captures that don't already carry a stack. Costs a few KB per event.
 
-Enabling it gives stack traces on `Sentry.captureMessage()` calls. Our codebase doesn't use `captureMessage` — all paths go through `reportError` → `captureException` (which always has a stack). Leaving off is fine. Revisit if `captureMessage` ever appears.
+Landed in `baseInit.ts` with a smoke test asserting `attachStacktrace === true`.
 
-#### Audit #7 — `hideSourceMaps` may be deprecated in Sentry v10
+#### Audit #7 — `hideSourceMaps` was dead in Sentry v10 ✅ FIXED
 
-Some `withSentryConfig` options were renamed in the v7→v8 migration. Worth verifying in the Sentry changelog that `hideSourceMaps` is still honoured. Behaviour is already correct via `productionBrowserSourceMaps: false` in next.config — if `hideSourceMaps` is a no-op, removing it is cosmetic.
+Verified against the installed `@sentry/nextjs@10.48.0` type definitions: `hideSourceMaps` is no longer in `withSentryConfig`'s typed options. The option in our `nextConfig.js` was a no-op. Removed it and left a comment pointing future readers at the replacement (the top-level `productionBrowserSourceMaps: false` was already doing the work).
 
-#### Audit #8 — All error capture funnels through `reportError`
+Other `withSentryConfig` options confirmed still valid in v10:
 
-Audit confirmed there are no stray `Sentry.captureException` / `captureMessage` call sites — every capture goes through the wrapper, which means the scrubber + tagging is applied uniformly. Keep enforcing this convention.
+- `widenClientFileUpload` ✅
+- `tunnelRoute` ✅
+- `disableLogger` ✅
+- `autoInstrumentServerFunctions` ⚠️ deprecated in favor of `webpack.autoInstrumentServerFunctions` — works fine, can be moved in a follow-up.
 
-#### Audit #9 — Replay sample rates are aggressive
+#### Audit #8 — All error capture funnels through `reportError` ✅ ALREADY CORRECT
 
-`replaysSessionSampleRate: 0.1` (10% of all sessions) + `replaysOnErrorSampleRate: 1.0` (100% on errors) is industry-standard but quota-hungry. Monitor Sentry usage after launch and dial down if needed.
+Audit confirmed there are no stray `Sentry.captureException` / `captureMessage` call sites in app code — every capture goes through the `reportError` wrapper, so the scrubber + tagging is applied uniformly. The exceptions are non-capture or special-purpose helpers:
+
+- `_error.tsx` → `Sentry.captureUnderscoreErrorException` — SSR-specific, attaches Next request context
+- `useSentryIdentity` → `Sentry.setUser` — identity scope, not capture
+- `sentryContext.ts` → `Sentry.setTag` / `setContext` — scope enrichment
+- `withSentryUser` → `Sentry.withIsolationScope` — scope isolation
+
+No code change needed. Keep enforcing this convention.
+
+#### Audit #9 — Replay sample rates — POST-LAUNCH MONITORING
+
+`replaysSessionSampleRate: 0.1` (10% of all sessions) + `replaysOnErrorSampleRate: 1.0` (100% on errors) is industry-standard but quota-hungry. Not a code change for this PR — monitor Sentry usage after launch and dial down if needed.
 
 ---
 
@@ -465,7 +492,7 @@ A shared `reportError(error, context)` utility funnels every error through `Sent
 | `getSentryRoute` | 5 | template pathname, `Router.pathname` fallback, `window.location.pathname` fallback, `/_error` skip, SSR undefined |
 | `createAppQueryClient` | 5 | return shape, query onError, mutation onError, toast wiring, undefined-route |
 | `withSentryUser` | 5 | isolation-scope wrap, nested async, header corr-id reuse, session user, query-param extraction |
-| `baseInit` | **4 (new)** | hardening defaults, env-derived DSN/release/environment, env-aware sample rate, debug-off |
+| `baseInit` | **9 (new)** | `beforeSend` scrubber wired, env-derived DSN / release / environment / DSN-per-portal, env-aware `tracesSampleRate`, `debug` off, `attachStacktrace` on, `ignoreErrors` contains the noise patterns, `beforeBreadcrumb` (drops console in production, keeps in stage, keeps non-console regardless of env) |
 | `sentryContext` (existing) | 14 | adjusted for v10 mock shape |
 
 **Total in `@proofed/shared`: 1300 passing.**
@@ -479,47 +506,45 @@ A shared `reportError(error, context)` utility funnels every error through `Sent
 
 ## Recommendation
 
-### Block list (must land before merge)
+### Done — all audit items landed and pushed
 
-1. **Commit the staged scrubber-leak fix + DRY + hardening + rename** (12 files, currently staged uncommitted). Pre-flight green: 1300/1300 tests, typecheck clean.
-2. **Delete `apps/creative-portal/config/sentry.ts` and `apps/customer-portal/config/sentry.ts`** (Audit #1). Stale-DSN files routing to a different Sentry org — no call sites. 2-file deletion.
-3. **Switch `_error.tsx` to `await Sentry.captureUnderscoreErrorException(contextData)`** (Audit #2). ~5 lines in `packages/shared/components/pages/error/index.tsx` + adjust the 6 `Sentry.captureException` mocks in `ErrorPage.test.tsx`.
-4. **Push** — branch is currently 14+ commits ahead of `origin/fix/PP-1750-improve-error-tracking`. CI re-runs.
-5. After CI green, the PR is ready to merge.
+| # | Item | Commit |
+|---|---|---|
+| 1 | Scrubber leak fix (Option A) + DRY runtime configs + `isCreativePortal` → `portal` rename | `ef409aa24` |
+| 2 | Delete orphaned stale-DSN files (Audit #1) | `58569d673` |
+| 3 | `_error.tsx` switched to `await Sentry.captureUnderscoreErrorException(contextData)` (Audit #2); `lastEventId()` added to shared mock; 6 `getInitialProps` assertions updated | `58569d673` |
+| 4 | `ignoreErrors` for known noise patterns (Audit #3) | `73f2169ea` |
+| 5 | `denyUrls` for third-party scripts (Audit #4) | `73f2169ea` |
+| 6 | `beforeBreadcrumb` to drop console breadcrumbs in production (Audit #5) | `73f2169ea` |
+| 7 | `attachStacktrace: true` (Audit #6) | `73f2169ea` |
+| 8 | Drop dead `hideSourceMaps` from `nextConfig.js` (Audit #7) | `73f2169ea` |
 
-### Nice-to-have in this PR (recommended — additive, low-risk)
+Branch pushed and up-to-date with `origin/fix/PP-1750-improve-error-tracking`. `gh pr view` reports `mergeable: MERGEABLE`, `mergeStateStatus: CLEAN`. Ready to merge on approver sign-off.
 
-6. **Audit #3 — `ignoreErrors` in `baseInit.ts`** — drops ResizeObserver / chunk-load / "Script error." / "Non-Error promise rejection" noise across all 3 runtimes. ~10 lines.
-7. **Audit #4 — `denyUrls` in `client.config.ts`** — drops chrome-extension / gtm / hotjar / stripe stack-trace events. ~8 lines.
-8. **Audit #5 — `beforeBreadcrumb` in `baseInit.ts`** — drops `console.*` breadcrumbs in production only. ~8 lines.
+### Remaining before PR #2261 (axios 1.x) merges — coordination follow-up, NOT a blocker for this PR
 
-All three are decision-grade ergonomics, not security; they protect Sentry's quota and signal-to-noise ratio. Safer to land here than separately since we're already touching `baseInit.ts`.
+**Update `installAxiosCorrelationInterceptor` to mutate headers via `AxiosHeaders.set()` instead of spreading.** Drop-in replacement:
 
-### Remaining before PR #2261 (axios 1.x) merges
+```ts
+axios.interceptors.request.use((config) => {
+  const existing = config.headers?.get?.(CORRELATION_HEADER);
+  const corrId =
+    typeof existing === "string" && existing.length > 0
+      ? existing
+      : generateCorrelationId();
+  config.headers.set(CORRELATION_HEADER, corrId);
+  return config;
+});
+```
 
-9. **Update `installAxiosCorrelationInterceptor` to mutate headers via `AxiosHeaders.set()` instead of spreading.** Drop-in replacement:
+Can land here as a follow-up commit OR be folded into PR #2261's axios migration. Whichever merges first owns the fix. Add a test that asserts `config.headers instanceof AxiosHeaders` after the interceptor runs.
 
-   ```ts
-   axios.interceptors.request.use((config) => {
-     const existing = config.headers?.get?.(CORRELATION_HEADER);
-     const corrId =
-       typeof existing === "string" && existing.length > 0
-         ? existing
-         : generateCorrelationId();
-     config.headers.set(CORRELATION_HEADER, corrId);
-     return config;
-   });
-   ```
-
-   Can land here as a follow-up commit OR be folded into PR #2261's axios migration. Whichever merges first owns the fix. Add a test that asserts `config.headers instanceof AxiosHeaders` after the interceptor runs.
-
-   Note: `createAppQueryClient`'s corr-id extraction reads `headers["x-correlation-id"]` which is safe under both axios 0.27 and 1.x (AxiosHeaders exposes property accessors), so no change needed there.
+Note: `createAppQueryClient`'s corr-id extraction reads `headers["x-correlation-id"]` which is safe under both axios 0.27 and 1.x (AxiosHeaders exposes property accessors), so no change needed there.
 
 ### Optional follow-ups (out of scope for this PR)
 
-- **Audit #6** — `attachStacktrace: true`. Only relevant if `captureMessage` ever appears. Defer.
-- **Audit #7** — Verify `hideSourceMaps` still honoured in Sentry v10. Behaviour already correct via `productionBrowserSourceMaps: false`; if it's a no-op, removing it is cosmetic.
 - **Audit #9** — Monitor Replay quota after launch; dial sample rates down if 10% session-rate + 100% on-error proves too aggressive.
+- **`autoInstrumentServerFunctions`** — currently at the top level of `withSentryConfig`'s options; Sentry deprecated this in favor of `webpack.autoInstrumentServerFunctions`. Cosmetic move, no behavior change.
 - Consider splitting future Sentry SDK upgrades into standalone PRs. This one bundles the SDK bump with the error-tracking infra; the bundled approach is well-tested here, but the precedent is risky.
 - Add a regression sentinel test for `SENSITIVE_FIELDS` redaction after the scrubber dedup, so future edits can't accidentally widen the leak surface.
 - Consider nested boundaries around known crash hotspots (Tiptap editor regions, OrderCreation flow) so a local failure doesn't blank the whole app — the current single boundary catches everything, but a localised fallback would degrade gracefully instead.
