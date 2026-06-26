@@ -4,7 +4,7 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1953
 **Status:** In Progress (Bug, High priority)
 
-> **Update (follow-up commits `6c7c30d8`, `9201e47f`):** Issues 2 and 5 resolved in `6c7c30d8` (buffer memo floored at 0; fake-timer minute-tick test added). Issues 1 and 4 resolved in `9201e47f` (shared-deadline computed max-after-loop; submit anchored on minute-floored now). Issue 3 is **intentionally deferred** to a separate follow-up (clock-rewrite risk disproportionate to a latent-only benefit). Issue 6 is **intentional** (author preference / branch kept by request). Resolved items are marked **✅ Resolved**.
+> **Update (follow-up commits `6c7c30d8`, `9201e47f`, `5697a964`):** Issues 2 and 5 resolved in `6c7c30d8` (buffer memo floored at 0; fake-timer minute-tick test). Issues 1 and 4 resolved in `9201e47f` (shared-deadline computed max-after-loop; submit anchored on minute-floored now). Issue 3 resolved in `5697a964` (deadline clock now sourced from the shared `useZonedTime`). Issue 6 is **intentional** (author preference / branch kept by request). **All correctness/quality findings (1–5) are now resolved.** Resolved items are marked **✅ Resolved**.
 
 ---
 
@@ -17,7 +17,7 @@ The ticket's written **Expected Result** ("recalculate the order deadline minute
 | A feasible-at-start order must stay submittable; submit no longer blocked by `Final job maxReturnTime exceeds order dueDateTime` | The minute-tick effect clamps `orders[i].deadline` forward to the last job's Job Due Date once the chain overtakes it, so the client check (`validateOrderJobTimings` → `calculateJobsReturnTime`) and the server mirror both pass | ✅ Addressed |
 | Agreed behaviour: Buffer > 0 → deadline held, only buffer counts down | When `lastJobDueDateUtc < nextDeadline` no clamp occurs and the early-return (`nextDeadline === order.deadline`) leaves the deadline untouched; `currentBuffers` memo recomputes each minute | ✅ Addressed |
 | Agreed behaviour: Buffer = 0 → deadline ticks up to last Job Due Date; buffer floors at 0 | Clamp sets `nextDeadline = lastJobDueDateUtc` (= minute-floored now + Σ maxReturnWindowsMinutes); buffer memo now floors at 0 (`Math.max(0, …)`) so it cannot flash negative | ✅ Addressed |
-| Stay in phase with the per-job Job Due Date chain (no sub-minute lag) | `todaysDate` is now minute-floored (`getZonedMinuteNow`) and the tick is aligned to the wall-clock `:00` boundary (setTimeout → setInterval), matching `useZonedTime`'s minute quantization used by the display chain | ✅ Addressed |
+| Stay in phase with the per-job Job Due Date chain (no sub-minute lag) | `todaysDate` is sourced from the shared `useZonedTime` (the display chain's own clock); the aligned `:00`-boundary interval forces the per-minute re-render | ✅ Addressed |
 | Preserve PP-1941 (missing/past deadline reset to delivery-calc value, UTC-frame comparison) | `getReferenceNowUtc(todaysDate, timeZone)` retained; `isMissingOrPast` resets to `fallbackDeadline` before the clamp | ✅ Addressed |
 | Every PR includes tests for new code | `deadline clamp-forward (PP-1953)` suite — now 4 cases incl. a fake-timer minute-tick progression test (Buffer counts down 2→1→0, deadline held, then clamps forward) covering the elapsed-time scenario and the alignment timer | ✅ Addressed |
 | Customer Portal: does it need the same fix? (open question, cmt 62267) | Not addressed; PR is Creative Portal only — investigation confirmed CP order creation is single-shot and computes job timings fresh at submit, so it has no equivalent drift | ✅ Answered (creative-portal only) |
@@ -36,10 +36,10 @@ The fix reworks the existing "update deadline if missing/invalid" effect in `use
 
 Two supporting changes make the clamp land on the *same* minute the display chain shows:
 
-1. `getZonedMinuteNow()` floors `Date.now()` to the minute before zoning — identical to `useZonedTime`'s `Math.floor(Date.now()/60_000)*60_000` quantization.
-2. The tick is re-armed to fire on the wall-clock `:00` boundary (setTimeout to the next minute, then setInterval).
+1. `todaysDate` is sourced from the shared `useZonedTime` hook (the same clock the Job Due Date chain uses), so a single minute-floor quantization feeds both — no drift-prone duplicate formula.
+2. The aligned interval fires on the wall-clock `:00` boundary (setTimeout to the next minute, then setInterval) purely to force the per-minute re-render that makes `useZonedTime` re-read the clock.
 
-This is correct because the submit-time check truncates to minute precision (`startOfMinute(finalMaxReturn) > startOfMinute(dueDate)`). The clamped deadline is `flooredNow + Σ`; the submit now also chains from a minute-floored now (Issue 4), so both share the same wall-clock minute and `startOfMinute` collapses them. The approach reuses the shared `calculateJobsReturnTime` for client/server agreement, so a clamped deadline that satisfies the client mirror satisfies the server by construction. The change is localized to one hook plus the submit anchor; the only public surface (`currentBuffers`, `todaysDate`, handlers) is unchanged, so blast radius is limited to the Workflow step. Sole consumer is `WorkflowStep/index.tsx`.
+This is correct because the submit-time check truncates to minute precision (`startOfMinute(finalMaxReturn) > startOfMinute(dueDate)`). The clamped deadline is `flooredNow + Σ`; the submit now also chains from a minute-floored now (Issue 4), so both share the same wall-clock minute and `startOfMinute` collapses them — the check passes with no rollover race. The approach reuses the shared `calculateJobsReturnTime` for client/server agreement, so a clamped deadline that satisfies the client mirror satisfies the server by construction. The change is localized to one hook plus the submit anchor; the only public surface (`currentBuffers`, `todaysDate`, handlers) is unchanged, so blast radius is limited to the Workflow step. Sole consumer is `WorkflowStep/index.tsx`.
 
 ---
 
@@ -73,7 +73,7 @@ This is correct because the submit-time check truncates to minute precision (`st
 
 **Resolution:** The memo now returns `Math.max(0, differenceInMinutes(...))`, so the displayed Buffer can never dip below zero regardless of effect timing. The new minute-tick progression test (Issue 5) asserts the Buffer reads `0` — not `-1` — at the overtake minute.
 
-### 3. `getZonedMinuteNow` duplicates `useZonedTime`'s minute-quantization instead of reusing it — ⏭️ Deferred (intentional, separate follow-up)
+### 3. `getZonedMinuteNow` duplicates `useZonedTime`'s minute-quantization instead of reusing it — ✅ Resolved (commit `5697a964`)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -81,13 +81,11 @@ This is correct because the submit-time check truncates to minute precision (`st
 
 **Severity:** low
 
-**Problem:** `getZonedMinuteNow` re-implements exactly what `apps/creative-portal/hooks/useZonedTime.ts` already does — `toZonedTime(new Date(Math.floor(Date.now()/60_000)*60_000), timeZone)`. The display chain (`useWorkflowWindowInputRow`) gets its clock from `useZonedTime`; this hook now maintains a second, formula-duplicated clock. Phase alignment between the clamped deadline and the displayed Job Due Date depends on the two formulas staying byte-identical.
+**Problem:** `getZonedMinuteNow` re-implemented exactly what `apps/creative-portal/hooks/useZonedTime.ts` already does — `toZonedTime(new Date(Math.floor(Date.now()/60_000)*60_000), timeZone)`. The display chain (`useWorkflowWindowInputRow`) gets its clock from `useZonedTime`; this hook maintained a second, formula-duplicated clock. Phase alignment between the clamped deadline and the displayed Job Due Date depended on the two formulas staying byte-identical.
 
-**Impact:** No current defect — the formulas match, so both land on the same minute. But it's a reuse-first violation (per CLAUDE.md) and a latent drift risk: if `useZonedTime`'s quantization is ever changed, the deadline would silently fall out of phase with the display chain again (the exact class of bug this ticket fixes). `useDeadlineManagement` still needs its own `setInterval` to *drive* re-renders (a memo-only `useZonedTime` doesn't tick), but it could source the `todaysDate` *value* from `useZonedTime()` and use the interval purely as a render trigger.
+**Impact:** No defect at the time (the formulas matched), but a reuse-first violation (per CLAUDE.md) and a latent drift risk: if `useZonedTime`'s quantization were ever changed, the deadline would silently fall out of phase with the display chain again (the exact class of bug this ticket fixes).
 
-**Disposition:** **Intentionally deferred to a separate follow-up.** This is a clock rewrite — the `todaysDate` source feeds the buffer memo, the clamp effect, and the displayed `todaysDate`; a wiring mistake would reintroduce the frozen-clock bug this ticket fixes. The benefit is latent-only (no current defect), so bundling it into this bug-fix PR is a disproportionate regression risk. Tracked as a follow-up; not in this PR's scope.
-
-**Fix (when picked up):** Derive `todaysDate` from `useZonedTime()` and use the aligned interval only to force a re-render (e.g. a tick counter), so a single quantization definition feeds both clocks.
+**Resolution:** `useDeadlineManagement` now does `const { todaysDate, timeZone } = useZonedTime()` — the single shared clock the Job Due Date chain (`WorkflowWindowInputRow`) already uses — and the duplicated `getZonedMinuteNow` formula plus its `todaysDate` state were removed. The aligned interval is reduced to a per-minute re-render trigger (`forceMinuteTick`), since `useZonedTime` re-reads the clock on render but does not tick on its own. Behaviour is unchanged (same minute-floored zoned value, same per-minute advancement) — verified by the 10/10 suite incl. the minute-tick progression and minute-floor-anchoring tests. The phase-alignment drift risk is eliminated: one quantization definition now feeds both clocks.
 
 ### 4. Residual submit race at the minute boundary — ✅ Resolved (commit `9201e47f`)
 
@@ -133,14 +131,14 @@ This is correct because the submit-time check truncates to minute precision (`st
 
 ## Validation Checks
 
-Run against the PR branch at follow-up commit `9201e47f`.
+Run against the PR branch at follow-up commit `5697a964`.
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ✅ | Touched suite **10/10** pass (incl. the minute-tick progression test) after the Issue 1 & 4 changes. Full-repo run on an earlier commit had 1 **pre-existing, unrelated** failure in `@proofed/shared/utils/formatWordQuantity.test.ts` (Indian-locale digit grouping) — no files touched in `packages/shared`. |
-| `npx turbo run typecheck` | ✅ | creative-portal typecheck clean (0 errors), incl. the `index.tsx` submit change. |
+| `npx turbo run test` | ✅ | Touched suite **10/10** pass (incl. the minute-tick progression test) after the Issue 1, 3 & 4 changes. Full-repo run on an earlier commit had 1 **pre-existing, unrelated** failure in `@proofed/shared/utils/formatWordQuantity.test.ts` (Indian-locale digit grouping) — no files touched in `packages/shared`. |
+| `npx turbo run typecheck` | ✅ | creative-portal typecheck clean (0 errors), incl. the `index.tsx` submit change and the `useZonedTime` swap. |
 | `npx turbo run lint` | ✅ | Clean on touched files (`useDeadlineManagement.ts`, `index.tsx`). |
-| `npx turbo run build` | ✅ | Full `turbo run build` was green (4/4 tasks) on commit `309580eb`; the follow-up deltas (`Math.max` floor, shared-deadline accumulation, minute-floored `orderStartTime`) are localized logic + a test, so build is unaffected. |
+| `npx turbo run build` | ✅ | Full `turbo run build` re-run green on `5697a964` (4/4 tasks); also green on `309580eb`. |
 
 ---
 
@@ -159,7 +157,7 @@ Run against the PR branch at follow-up commit `9201e47f`.
 | Correctness | ✅ Fix matches the on-call agreed behaviour and resolves the client + server rejection by construction |
 | Regression risk | ✅ Low — changes localized to one hook + the submit anchor; public API unchanged; single consumer |
 | Tests | ✅ Clamp math + minute-tick progression + alignment timer all covered (10/10) |
-| Code quality | ✅ Good; Issues 1, 2, 4, 5 resolved; Issue 3 deferred (intentional), Issue 6 intentional |
+| Code quality | ✅ Good; Issues 1–5 all resolved; Issue 6 intentional (comments/branch by author preference) |
 | Validation suite | ✅ test / typecheck / lint / build all green |
 | Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`) |
 
@@ -169,8 +167,7 @@ Run against the PR branch at follow-up commit `9201e47f`.
 
 **Approve.**
 
-1. **Issues 2 & 5 resolved** in `6c7c30d8` (Buffer memo floored at 0; minute-tick progression test). **Issues 1 & 4 resolved** in `9201e47f` (shared deadline computed max-after-loop; submit anchored on minute-floored now). Validation (test / typecheck / lint / build) all green.
-2. **Issue 3 — intentionally deferred** to a separate follow-up: it's a clock rewrite with latent-only benefit, disproportionate regression risk to bundle into this bug-fix PR.
-3. **Issue 6 — intentional:** comments omitted by author preference; branch kept on the same branch by request.
-4. **Customer Portal (cmt 62267) — answered: creative-portal only.** CP order creation is single-shot and computes job timings fresh at submit, so it has no equivalent frozen-deadline-vs-sliding-chain drift; no CP fix required.
-5. **Process:** update the ticket's stale "Expected Result" text to reflect the agreed clamp-at-zero behaviour.
+1. **All correctness/quality findings (Issues 1–5) resolved:** #2 & #5 in `6c7c30d8` (Buffer memo floored at 0; minute-tick progression test), #1 & #4 in `9201e47f` (shared deadline max-after-loop; minute-floored submit anchor), #3 in `5697a964` (deadline clock sourced from shared `useZonedTime`). Validation (test / typecheck / lint / build) all green.
+2. **Issue 6 — intentional:** comments omitted by author preference; branch kept on the same branch by request.
+3. **Customer Portal (cmt 62267) — answered: creative-portal only.** CP order creation is single-shot and computes job timings fresh at submit, so it has no equivalent frozen-deadline-vs-sliding-chain drift; no CP fix required.
+4. **Process:** update the ticket's stale "Expected Result" text to reflect the agreed clamp-at-zero behaviour.
