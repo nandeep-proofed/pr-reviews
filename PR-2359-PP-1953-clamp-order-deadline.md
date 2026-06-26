@@ -4,7 +4,7 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1953
 **Status:** In Progress (Bug, High priority)
 
-> **Update (follow-up commit `6c7c30d8`):** Issues 2 and 5 below have been **resolved** — the `buffers` memo is now floored at 0, and a fake-timer minute-tick progression test was added. Sections updated in place; resolved items are marked **✅ Resolved**.
+> **Update (follow-up commits `6c7c30d8`, `9201e47f`):** Issues 2 and 5 resolved in `6c7c30d8` (buffer memo floored at 0; fake-timer minute-tick test added). Issues 1 and 4 resolved in `9201e47f` (shared-deadline computed max-after-loop; submit anchored on minute-floored now). Issue 3 is **intentionally deferred** to a separate follow-up (clock-rewrite risk disproportionate to a latent-only benefit). Issue 6 is **intentional** (author preference / branch kept by request). Resolved items are marked **✅ Resolved**.
 
 ---
 
@@ -39,13 +39,13 @@ Two supporting changes make the clamp land on the *same* minute the display chai
 1. `getZonedMinuteNow()` floors `Date.now()` to the minute before zoning — identical to `useZonedTime`'s `Math.floor(Date.now()/60_000)*60_000` quantization.
 2. The tick is re-armed to fire on the wall-clock `:00` boundary (setTimeout to the next minute, then setInterval).
 
-This is correct because the submit-time check truncates to minute precision (`startOfMinute(finalMaxReturn) > startOfMinute(dueDate)`). The clamped deadline is `flooredNow + Σ`; the submit chains from `new Date()` (`liveNow + Σ`); both share the same wall-clock minute, so `startOfMinute` collapses them and the check passes. The approach reuses the shared `calculateJobsReturnTime` for client/server agreement, so a clamped deadline that satisfies the client mirror satisfies the server by construction. The change is localized to one hook; the only public surface (`currentBuffers`, `todaysDate`, handlers) is unchanged, so blast radius is limited to the Workflow step. Sole consumer is `WorkflowStep/index.tsx`.
+This is correct because the submit-time check truncates to minute precision (`startOfMinute(finalMaxReturn) > startOfMinute(dueDate)`). The clamped deadline is `flooredNow + Σ`; the submit now also chains from a minute-floored now (Issue 4), so both share the same wall-clock minute and `startOfMinute` collapses them. The approach reuses the shared `calculateJobsReturnTime` for client/server agreement, so a clamped deadline that satisfies the client mirror satisfies the server by construction. The change is localized to one hook plus the submit anchor; the only public surface (`currentBuffers`, `todaysDate`, handlers) is unchanged, so blast radius is limited to the Workflow step. Sole consumer is `WorkflowStep/index.tsx`.
 
 ---
 
 ## Issues Found
 
-### 1. Multi-order `sharedOrder.deadline` sync relies on stale Formik reads within the loop
+### 1. Multi-order `sharedOrder.deadline` sync relies on stale Formik reads within the loop — ✅ Resolved (commit `9201e47f`)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -53,24 +53,11 @@ This is correct because the submit-time check truncates to minute precision (`st
 
 **Severity:** low
 
-**Problem:** The effect loops over `formik.values.orders` and, per order, conditionally raises `sharedOrder.deadline` to that order's `nextDeadline`. `formik.setFieldValue` is batched, so within a single synchronous pass each iteration reads the *original* `sharedOrder.deadline`, not the value a previous iteration just wrote. With multiple selected orders that clamp to different deadlines, the loop is last-writer-wins, not max-wins, on the first render.
+**Problem:** The effect looped over `formik.values.orders` and, per order, conditionally raised `sharedOrder.deadline` to that order's `nextDeadline`. `formik.setFieldValue` is batched, so within a single synchronous pass each iteration read the *original* `sharedOrder.deadline`, not the value a previous iteration just wrote. With multiple selected orders that clamp to different deadlines, the loop was last-writer-wins, not max-wins, on the first render.
 
-**Impact:** For a multi-order batch with differing clamped deadlines, `sharedOrder.deadline` can momentarily reflect a smaller order's deadline rather than the maximum. Because `formik` identity changes every render and is in the dep array, the effect re-runs and the value converges to the true max over a few renders — so this is self-correcting and not a user-visible defect in practice, but the per-iteration logic is fragile and would break if the early-return or deps were changed later.
+**Impact:** For a multi-order batch with differing clamped deadlines, `sharedOrder.deadline` could momentarily reflect a smaller order's deadline rather than the maximum (self-correcting over a few renders, but fragile).
 
-**Disposition:** Pre-existing pattern, self-correcting; left as an optional follow-up (not in this PR's scope).
-
-**Fix:** Compute the intended shared deadline once from the order set (e.g. `Math.max` of all clamped `nextDeadline`s) and write it a single time after the loop, rather than reading `formik.values.sharedOrder.deadline` inside the loop:
-
-```typescript
-let sharedNext = formik.values.sharedOrder?.deadline;
-formik.values.orders.forEach((order, index) => {
-  // ...compute nextDeadline, write orders[index].deadline...
-  if (!sharedNext || sharedNext < nextDeadline) sharedNext = nextDeadline;
-});
-if (sharedNext !== formik.values.sharedOrder?.deadline) {
-  formik.setFieldValue("sharedOrder.deadline", sharedNext);
-}
-```
+**Resolution:** The effect now accumulates `sharedNextDeadline` (initialised from the current shared deadline, raised to the max clamped `nextDeadline` across all orders) and writes `sharedOrder.deadline` **once after the loop**, only when it differs. Single-order flows are unchanged. The per-order write keeps its own no-op early-return so the `formik`-dependent effect still settles.
 
 ### 2. Buffer is not floored at 0 in the memo — possible one-frame negative flash at the overtake tick — ✅ Resolved (commit `6c7c30d8`)
 
@@ -86,7 +73,7 @@ if (sharedNext !== formik.values.sharedOrder?.deadline) {
 
 **Resolution:** The memo now returns `Math.max(0, differenceInMinutes(...))`, so the displayed Buffer can never dip below zero regardless of effect timing. The new minute-tick progression test (Issue 5) asserts the Buffer reads `0` — not `-1` — at the overtake minute.
 
-### 3. `getZonedMinuteNow` duplicates `useZonedTime`'s minute-quantization instead of reusing it
+### 3. `getZonedMinuteNow` duplicates `useZonedTime`'s minute-quantization instead of reusing it — ⏭️ Deferred (intentional, separate follow-up)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -98,11 +85,11 @@ if (sharedNext !== formik.values.sharedOrder?.deadline) {
 
 **Impact:** No current defect — the formulas match, so both land on the same minute. But it's a reuse-first violation (per CLAUDE.md) and a latent drift risk: if `useZonedTime`'s quantization is ever changed, the deadline would silently fall out of phase with the display chain again (the exact class of bug this ticket fixes). `useDeadlineManagement` still needs its own `setInterval` to *drive* re-renders (a memo-only `useZonedTime` doesn't tick), but it could source the `todaysDate` *value* from `useZonedTime()` and use the interval purely as a render trigger.
 
-**Disposition:** Optional follow-up; the fix for #2's progression test also indirectly guards phase alignment.
+**Disposition:** **Intentionally deferred to a separate follow-up.** This is a clock rewrite — the `todaysDate` source feeds the buffer memo, the clamp effect, and the displayed `todaysDate`; a wiring mistake would reintroduce the frozen-clock bug this ticket fixes. The benefit is latent-only (no current defect), so bundling it into this bug-fix PR is a disproportionate regression risk. Tracked as a follow-up; not in this PR's scope.
 
-**Fix:** Consider deriving `todaysDate` from `useZonedTime()` and using the aligned interval only to force a re-render (e.g. a tick counter), so a single quantization definition feeds both clocks. At minimum, add a comment cross-referencing `useZonedTime` so the two stay in sync.
+**Fix (when picked up):** Derive `todaysDate` from `useZonedTime()` and use the aligned interval only to force a re-render (e.g. a tick counter), so a single quantization definition feeds both clocks.
 
-### 4. Residual submit race at the minute boundary
+### 4. Residual submit race at the minute boundary — ✅ Resolved (commit `9201e47f`)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/index.tsx]**
 
@@ -110,11 +97,11 @@ if (sharedNext !== formik.values.sharedOrder?.deadline) {
 
 **Severity:** low
 
-**Problem:** The submit check passes `orderStartTime: new Date()` (live, sub-minute) and chains from it, while the clamped `order.deadline` is anchored on the *minute-floored* now. Within the same wall-clock minute the `startOfMinute(finalMaxReturn) > startOfMinute(dueDate)` truncation collapses the two, so the check passes. But in the brief window after the wall clock crosses a minute boundary and before the re-clamp effect commits the new (later) deadline, a zero-buffer order submitted at that instant can still throw `Final job maxReturnTime exceeds order dueDateTime`.
+**Problem:** The submit check passed `orderStartTime: new Date()` (live, sub-minute) and chained from it, while the clamped `order.deadline` is anchored on the *minute-floored* now. Within the same wall-clock minute the `startOfMinute(finalMaxReturn) > startOfMinute(dueDate)` truncation collapsed the two, so the check passed. But in the brief window after the wall clock crossed a minute boundary and before the re-clamp effect committed the new (later) deadline, a zero-buffer order submitted at that instant could still throw `Final job maxReturnTime exceeds order dueDateTime`.
 
-**Impact:** A theoretical sub-second failure window at minute rollover for an order sitting at exactly zero buffer. It self-heals on the next render/tick (unlike the pre-fix frozen deadline, which never recovered), so this is a massive net improvement; flagging for completeness rather than as a defect. If fully deterministic submit is desired, anchoring `orderStartTime` to the same minute-floored now used for the clamp (instead of `new Date()`) would close it.
+**Impact:** A theoretical sub-second failure window at minute rollover for an order sitting at exactly zero buffer.
 
-**Disposition:** Theoretical, self-healing; documented optional follow-up.
+**Resolution:** `orderStartTime` is now anchored on the minute-floored now (`new Date(Math.floor(Date.now() / ONE_MINUTE_IN_MILLISECONDS) * ONE_MINUTE_IN_MILLISECONDS)`), the same minute granularity the clamp uses. Flooring moves the chain start to the minute boundary, so `startOfMinute(finalMaxReturn)` can never exceed the clamped `startOfMinute(dueDate)` at rollover — the rejection window is closed, and the change is strictly more lenient (it cannot newly block a valid order).
 
 ### 5. New clock/progression code is not directly tested — ✅ Resolved (commit `6c7c30d8`)
 
@@ -128,7 +115,7 @@ if (sharedNext !== formik.values.sharedOrder?.deadline) {
 
 **Resolution:** Added a fake-timer test that mounts with a positive Buffer (2 min) and advances across three minute boundaries (`vi.advanceTimersByTime(60_000)` per tick), asserting: Buffer counts down 2 → 1 → 0 while the deadline is **held**, then the deadline **clamps forward** once the chain overtakes it (at +3 min) with the Buffer floored at 0. This exercises the minute-tick progression and the wall-clock-aligned interval, and doubles as executable spec for the agreed behaviour. Suite is now 10 tests (was 9), all passing.
 
-### 6. Lost rationale comment / branch-name mismatch (informational)
+### 6. Lost rationale comment / branch-name mismatch — Intentional (author preference / branch kept by request)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -146,14 +133,14 @@ if (sharedNext !== formik.values.sharedOrder?.deadline) {
 
 ## Validation Checks
 
-Run against the PR branch at follow-up commit `6c7c30d8`.
+Run against the PR branch at follow-up commit `9201e47f`.
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ✅ | Touched suite **10/10** pass (incl. the new minute-tick progression test). Full-repo run on the prior commit had 1 **pre-existing, unrelated** failure in `@proofed/shared/utils/formatWordQuantity.test.ts` (Indian-locale digit grouping) — no files touched in `packages/shared`. |
-| `npx turbo run typecheck` | ✅ | creative-portal typecheck clean (0 errors). |
-| `npx turbo run lint` | ✅ | Clean on touched files. |
-| `npx turbo run build` | ✅ | Full `turbo run build` was green (4/4 tasks) on the prior commit `309580eb`; this follow-up delta is a one-line `Math.max` + a test file, so build is unaffected. |
+| `npx turbo run test` | ✅ | Touched suite **10/10** pass (incl. the minute-tick progression test) after the Issue 1 & 4 changes. Full-repo run on an earlier commit had 1 **pre-existing, unrelated** failure in `@proofed/shared/utils/formatWordQuantity.test.ts` (Indian-locale digit grouping) — no files touched in `packages/shared`. |
+| `npx turbo run typecheck` | ✅ | creative-portal typecheck clean (0 errors), incl. the `index.tsx` submit change. |
+| `npx turbo run lint` | ✅ | Clean on touched files (`useDeadlineManagement.ts`, `index.tsx`). |
+| `npx turbo run build` | ✅ | Full `turbo run build` was green (4/4 tasks) on commit `309580eb`; the follow-up deltas (`Math.max` floor, shared-deadline accumulation, minute-floored `orderStartTime`) are localized logic + a test, so build is unaffected. |
 
 ---
 
@@ -170,9 +157,9 @@ Run against the PR branch at follow-up commit `6c7c30d8`.
 | Aspect | Status |
 |---|---|
 | Correctness | ✅ Fix matches the on-call agreed behaviour and resolves the client + server rejection by construction |
-| Regression risk | ✅ Low — change localized to one hook; public API unchanged; single consumer |
+| Regression risk | ✅ Low — changes localized to one hook + the submit anchor; public API unchanged; single consumer |
 | Tests | ✅ Clamp math + minute-tick progression + alignment timer all covered (10/10) |
-| Code quality | ✅ Good; minor optional refinements remain (Issues 1, 3, 4) |
+| Code quality | ✅ Good; Issues 1, 2, 4, 5 resolved; Issue 3 deferred (intentional), Issue 6 intentional |
 | Validation suite | ✅ test / typecheck / lint / build all green |
 | Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`) |
 
@@ -182,7 +169,8 @@ Run against the PR branch at follow-up commit `6c7c30d8`.
 
 **Approve.**
 
-1. **Issues 2 and 5 resolved** in follow-up commit `6c7c30d8` — Buffer memo floored at 0; minute-tick progression test added. Validation (test / typecheck / lint / build) all green.
-2. **Customer Portal (cmt 62267) — answered: creative-portal only.** CP order creation is single-shot and computes job timings fresh at submit, so it has no equivalent frozen-deadline-vs-sliding-chain drift; no CP fix required.
-3. **Optional follow-ups (non-blocking):** Issue 1 (compute `sharedOrder.deadline` max-after-loop), Issue 3 (reuse `useZonedTime` quantization / cross-reference), Issue 4 (anchor `orderStartTime` to minute-floored now for a fully deterministic submit). None are required for this fix.
-4. **Process:** update the ticket's stale "Expected Result" text to reflect the agreed clamp-at-zero behaviour.
+1. **Issues 2 & 5 resolved** in `6c7c30d8` (Buffer memo floored at 0; minute-tick progression test). **Issues 1 & 4 resolved** in `9201e47f` (shared deadline computed max-after-loop; submit anchored on minute-floored now). Validation (test / typecheck / lint / build) all green.
+2. **Issue 3 — intentionally deferred** to a separate follow-up: it's a clock rewrite with latent-only benefit, disproportionate regression risk to bundle into this bug-fix PR.
+3. **Issue 6 — intentional:** comments omitted by author preference; branch kept on the same branch by request.
+4. **Customer Portal (cmt 62267) — answered: creative-portal only.** CP order creation is single-shot and computes job timings fresh at submit, so it has no equivalent frozen-deadline-vs-sliding-chain drift; no CP fix required.
+5. **Process:** update the ticket's stale "Expected Result" text to reflect the agreed clamp-at-zero behaviour.
