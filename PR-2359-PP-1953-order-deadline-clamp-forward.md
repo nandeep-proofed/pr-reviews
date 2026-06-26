@@ -40,7 +40,7 @@ Regression surface is low: the hook's return shape is unchanged, and consumers (
 
 ## Issues Found
 
-### 1. `currentBuffers` sort is lexicographic and mutates the memo (pre-existing)
+### 1. `currentBuffers` sort is lexicographic and mutates the memo — Pre-existing (out of scope, not introduced by this PR)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -63,7 +63,7 @@ const currentBuffers = useMemo(
 );
 ```
 
-### 2. Explanatory comments dropped from the modified effects
+### 2. Explanatory comments dropped from the modified effects — Intentional (per author preference)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -75,9 +75,11 @@ const currentBuffers = useMemo(
 
 **Impact:** The timezone-frame reasoning (a genuine footgun this code already tripped over in PP-1858/PP-1941) is no longer documented inline, raising the chance a future edit reintroduces a double-offset or past-deadline-skew bug.
 
-**Fix:** Re-add a short header on the clamp effect and retain the PP-1941 canonical-UTC rationale. (Author intentionally omitted comments this round; noting the readability cost for the record.)
+**Disposition:** Intentional — the author chose to ship without added comments this round. Non-blocking; can be revisited if the preference changes.
 
-### 3. `sharedOrder.deadline` sync uses a stale read inside the loop (pre-existing pattern)
+**Fix (if revisited):** Re-add a short header on the clamp effect and retain the PP-1941 canonical-UTC rationale.
+
+### 3. `sharedOrder.deadline` sync uses a stale read inside the loop — Pre-existing (out of scope, not introduced by this PR)
 
 **[File: apps/creative-portal/components/organisms/NewOrderForm/partials/WorkflowStep/hooks/useDeadlineManagement.ts]**
 
@@ -91,7 +93,7 @@ const currentBuffers = useMemo(
 
 **Fix:** If tightened later, compute the max clamped deadline across orders once, then write `sharedOrder.deadline` after the loop.
 
-### 4. Branch name no longer matches the implementation
+### 4. Branch name no longer matches the implementation — Intentional (kept on the same branch by request)
 
 **[File: n/a — repo metadata]**
 
@@ -101,7 +103,9 @@ const currentBuffers = useMemo(
 
 **Impact:** Cosmetic/traceability only; called out in the PR body already.
 
-**Fix:** Optional — rename, or leave since the PR squash-merges and the title is accurate.
+**Disposition:** Intentional — work continued on the same branch by request; not renaming.
+
+**Fix:** None needed — the PR squash-merges and the PR title is accurate.
 
 ---
 
@@ -144,5 +148,5 @@ const currentBuffers = useMemo(
 
 1. **Validation green** — `test`, `typecheck`, `lint`, and `build` (4/4 tasks, exit 0) all pass. The one `turbo run test` failure is a pre-existing, unrelated locale issue in `@proofed/shared` (`formatWordQuantity`), not touched by this PR.
 2. **Customer-portal question (comment 62267) — answered: creative-portal only.** Investigation confirmed customer-portal order creation is single-shot and computes job timings fresh at submit (`calculateJobsReturnTime` with `orderStartTime = new Date()`), with the minute refetch being display-only. No frozen-deadline-vs-sliding-chain asymmetry exists there, so no customer-portal fix is required.
-3. **Non-blocking:** consider re-adding a one-line header comment on the clamp effect (Issue 2) and filing the pre-existing `buffers.sort()` bug (Issue 1) separately.
-4. **Optional:** rename the branch to reflect clamp-vs-slide, or rely on the squash-merge title.
+3. **Issues 1 & 3 — pre-existing, out of scope.** Not introduced by this PR; leave for PP-1953 and file separately if desired (per scope discipline).
+4. **Issues 2 & 4 — intentional.** Comments omitted by author preference (Issue 2) and the branch name kept on purpose (Issue 4); neither blocks merge.
