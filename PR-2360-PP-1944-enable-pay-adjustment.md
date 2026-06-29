@@ -3,10 +3,10 @@
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2360
 **Jira:** https://proofed.atlassian.net/browse/PP-1944
 **Status:** In Progress
-**Head:** `feature/PP-1944-enable-pay-adjustment` @ `b9dadfc1a` → `develop`
+**Head:** `feature/PP-1944-enable-pay-adjustment` @ `6a73584b1` → `develop`
 **Files:** 18 changed (+~960 / −~60)
 
-> **Review note:** one functional bug surfaced during the live walkthrough and was **fixed in this review** (Issue 5, commit `b9dadfc1a`) — the Amount field was locked in standalone Pay. Issues 1–4 below remain as suggestions.
+> **Review note:** Issues **1, 2 and 5 were found and fixed during this review** (commits `b9dadfc1a`, `6a73584b1`). Issue 3 (safe-by-validation) and Issue 4 (UI test harness) are intentionally left as documented follow-ups with reasons below.
 
 ---
 
@@ -44,7 +44,7 @@ Clean, layered, and consistent with the existing Charge implementation:
 
 ## Issues Found
 
-### 1. Standalone User search is not restricted to editors
+### 1. Standalone User search is not restricted to editors — ✅ Resolved (commit `6a73584b1`)
 
 **[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/hooks.ts]**
 
@@ -52,13 +52,13 @@ Clean, layered, and consistent with the existing Charge implementation:
 
 **Severity:** medium
 
-**Problem:** The User search uses `useUsersQuery({ searchBy: "name", searchValue: term })` and filters only by `editor.active !== false`. It does not filter by role, so any user matching the name (e.g. admins/staff) can appear and be selected. The ticket specifies a "search/select of active **editors**."
+**Problem:** The User search used `useUsersQuery({ searchBy: "name", searchValue: term })` and filtered only by `editor.active !== false` — not by role — so any user matching the name (e.g. admins/staff) could be selected, whereas the ticket specifies "active **editors**."
 
-**Impact:** An admin could create a pay/compensation record against a non-editor user. The `UserDataSearchProps` shape includes `roles`, so the data is available to filter.
+**Why it occurred:** the name-search hook is role-agnostic, and I deferred the role filter as a `TODO` rather than hardcode a role string I hadn't confirmed.
 
-**Fix:** Confirm the intended role with the team and filter, e.g. `editors.filter((u) => u.active !== false && u.roles?.includes(<editorRole>))`. Already flagged with a `TODO(PP-1944)` in the code.
+**Resolution:** confirmed `UserRole.Editor` exists and `UserDataSearchProps` carries `roles`, then added `editor.roles?.includes(UserRole.Editor)` to the filter (alongside `active`). The User dropdown now only offers active editors.
 
-### 2. Type-specific field values persist across an Adjustment Type round-trip
+### 2. Type-specific field values persist across an Adjustment Type round-trip — ✅ Resolved (commit `6a73584b1`)
 
 **[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/index.tsx]**
 
@@ -66,11 +66,11 @@ Clean, layered, and consistent with the existing Charge implementation:
 
 **Severity:** low-medium
 
-**Problem:** Switching the type clears `errors`/`touched` (good) but **not field values**. If an admin selects an editor under Pay, switches to Charge, then back to Pay, `proofedUserId` is still set in Formik, but `PayStandaloneSection` remounts with empty local `selectedEditor`, so the User field shows the "Search for a user" placeholder while a value is silently retained. Same lingering applies to `jobId`/`unit`/`rate`/`quantity` and (Pay→Charge) `organizationGroupId`.
+**Problem:** Switching the type cleared `errors`/`touched` but **not field values**. Selecting an editor under Pay, switching to Charge, then back to Pay left `proofedUserId` set while the User field showed its placeholder (a hidden value). The same applied to `jobId`/`unit`/`rate`/`quantity`/`organizationGroupId`, and a Reason chosen under one type stayed selected under the other (whose option set doesn't contain it).
 
-**Impact:** Submission is still correct (`handleSubmit`/`buildCompensationPayload` read fields by type), but the UI can show an empty-looking User while a hidden `proofedUserId` is submitted — a potential "paid the wrong/again editor" surprise. Edge case (requires a type round-trip).
+**Why it occurred:** the original `onChange` deliberately preserved values (to avoid wiping data on an accidental switch) and only reset validation — which left the stale-hidden-value and mismatched-Reason edges.
 
-**Fix:** On type change, also reset the now-irrelevant field values, e.g. clear `proofedUserId`/`jobId`/`unit`/`rate`/`quantity` (and `organizationGroupId` when leaving Charge) alongside the existing `setErrors({})`/`setTouched({})`.
+**Resolution:** the `onChange` now resets the dynamic fields to defaults for the newly-selected type in a single `setValues({ ...DEFAULT_…, adjustmentType, orderIdString, chargeCurrencyCode }, false)` (preserving order id + currency), alongside `setErrors({})`/`setTouched({})`. No stale value or mismatched Reason can survive a type switch.
 
 ### 3. Non-null assertions in the payload builder
 
@@ -83,6 +83,10 @@ Clean, layered, and consistent with the existing Charge implementation:
 **Problem:** `proofedUserId: values.proofedUserId as number` and `payUnit: values.unit as number` cast away `null`. They're guaranteed non-null by the Pay validation before submit, so it's safe in practice, but the assertions bypass TS null-safety.
 
 **Impact:** If the function were ever called outside the validated submit path, it would emit `null` for required fields. Low.
+
+**Why it occurred:** the form fields are typed `number | null`, but the OMS payload requires `number`; the Pay schema makes them required, so the values are non-null by the time `handleSubmit` runs — I asserted rather than re-narrow what validation already guarantees.
+
+**Why not fixed:** it's safe-by-validation and low value — adding runtime guards for a state the schema already prevents would be dead code/noise. Left intentionally (can be hardened trivially if preferred).
 
 **Fix:** Optional — guard/narrow instead of asserting, or leave with the validation contract documented (it is, via the schema).
 
@@ -97,6 +101,10 @@ Clean, layered, and consistent with the existing Charge implementation:
 **Problem:** Pure logic is well covered (28 tests). The new **UI behaviors** — type-switch validation reset, conditional section rendering (charge vs job-linked vs standalone), editor-option merge for label persistence, unit-change quantity reset, disabled derived Unit — have no component/render tests; they rely on the manual/live verification done in this session.
 
 **Impact:** A future refactor could silently regress these without a failing test. Low (the repo has limited heavy modal-render test precedent).
+
+**Why it occurred:** I prioritised pure-logic unit tests (calculator, payload mapping, schema, description), which are deterministic and high-value; the new UI behaviours live in the component and need a full render harness (React Query + Formik + react-select mocks) the repo doesn't really have precedent for.
+
+**Why not fixed:** effort-vs-payoff within this story — a modal render test is a meaningful setup, and the UI was verified live against the designs this session. Tracked as a follow-up rather than blocking the PR.
 
 **Fix:** Optional follow-up: add a `@testing-library/react` test rendering the modal with mocked queries to assert the section swaps and the type-switch reset.
 
@@ -120,7 +128,7 @@ Clean, layered, and consistent with the existing Charge implementation:
 
 ## Validation Checks
 
-Run on the PR branch at `c5abd4100` (dev server stopped, `.next` cleaned). The Issue-5 fix (`b9dadfc1a`) is a one-line change on top; typecheck + lint re-run green for it.
+Run on the PR branch at `c5abd4100` (dev server stopped, `.next` cleaned). The in-review fixes on top — Issue 5 (`b9dadfc1a`) and Issues 1 & 2 (`6a73584b1`) — re-ran green for typecheck, lint, and the 28 modal tests.
 
 | Check | Result | Notes |
 |---|---|---|
@@ -145,10 +153,10 @@ Run on the PR branch at `c5abd4100` (dev server stopped, `.next` cleaned). The I
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Matches the agreed behaviour and the OMS spec; Charge unchanged (Issue 5 fixed in review) |
+| Correctness | ✅ Matches the agreed behaviour and the OMS spec; Charge unchanged |
 | Regression risk | ✅ Low — additive; Charge paths gated and unchanged; single modal consumer surface |
 | Tests | ⚠️ Strong unit coverage; UI-interaction tests absent (Issue 4) |
-| Code quality | ✅ Good; minor items (Issues 1–3) |
+| Code quality | ✅ Good; Issues 1, 2 & 5 fixed in review; 3 & 4 documented follow-ups |
 | Validation suite | ⚠️ test/typecheck/lint green; build inconclusive (flaky, code-unrelated) — confirm via CI |
 | Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`) |
 
@@ -158,9 +166,8 @@ Run on the PR branch at `c5abd4100` (dev server stopped, `.next` cleaned). The I
 
 **Approve with suggestions — pending a green build (CI authoritative).**
 
-1. **Issue 5 (high) — found & fixed in review** (`b9dadfc1a`): the Amount field was locked in standalone Pay (gated on the Project that Pay doesn't have), hiding the +/- toggle and blocking deductions. Now scoped to No-Order Charge.
+1. **Issues 1, 2 & 5 — found & fixed in review:** Amount field unlocked in standalone Pay (`b9dadfc1a`); User search filtered to editors + dynamic fields reset on type switch (`6a73584b1`).
 2. **Build gate:** the local build failure is demonstrably **not** from this PR (compiles clean; error is `@emotion/react` jsxDEV in an untouched file; three different post-compile failures this session on the same code = environment flakiness). Confirm a green build in CI before merge; do **not** treat the local failure as a code blocker.
-3. **(Issue 1, medium)** Confirm whether the standalone User search must filter to an editor role and apply it — currently any active user can be selected.
-4. **(Issue 2, low-medium)** Clear type-specific field values (not just errors) when the Adjustment Type changes, so a hidden `proofedUserId`/`jobId` can't survive a type round-trip.
-5. **(Issues 3–4, low)** Optional: tighten the payload-builder assertions; add a modal component test for the section-swap + type-switch reset.
-6. **Process:** `/security` review before merge (per the repo workflow); the `COMPENSATION` registry name is confirmed; the "Project (optional)" deferral is confirmed (Compensation API has no project field).
+3. **(Issue 3, low — intentionally left)** `as number` assertions are safe-by-validation; hardening optional.
+4. **(Issue 4, low — follow-up)** Add a modal component test for the section-swap + type-switch reset when a render harness is in place.
+5. **Process:** `/security` review before merge (per the repo workflow); the `COMPENSATION` registry name is confirmed; the "Project (optional)" deferral is confirmed (Compensation API has no project field).
