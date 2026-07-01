@@ -6,6 +6,8 @@
 
 > **Why is this PR still open?** It is in Jira status **Code Review** and is simply waiting on a human reviewer. There are **no human review comments** and **no requested changes** on GitHub. The only PR comment is an automated notice from the Codex bot that its credit limit was reached, so the automated AI review never ran — that is not a code objection, just a missing automated pass. GitHub reports the branch as mergeable (`clean`, no conflicts). The findings below are this review's own analysis of what a reviewer should check before approving.
 
+> **Verification pass (2nd revision):** Every finding below was re-verified against the source and the installed `prosemirror-view`. One originally-reported issue (a `posAtDOM === -1` crash path) was **retracted as a false positive** — see Issue 2. The remaining findings (1, 3, 4) were confirmed valid.
+
 ---
 
 ## Jira Requirements vs Implementation
@@ -44,9 +46,11 @@ Overall: correct approach, well-factored, follows existing conventions, and the 
 
 ## Issues Found
 
-All issues found are **low severity**. No correctness-breaking or medium/high issues were identified in the static review.
+After the verification pass, the valid findings are **all low severity**. No correctness-breaking or medium/high issues were identified. One originally-reported issue was retracted (Issue 2).
 
-### 1. Cross-block (multi-paragraph) replace-over-selection still falls through to the buggy native path
+### 1. Cross-block (multi-paragraph) replace-over-selection still falls through to the native path
+
+**Verdict: Valid (confirmed in source).**
 
 **[File: packages/wysiwyg/src/extensions/trackChanges-v2/plugins/tracking.ts]**
 
@@ -54,41 +58,40 @@ All issues found are **low severity**. No correctness-breaking or medium/high is
 
 **Severity:** low
 
-**Problem:** `buildTrackedReplacement` returns `null` when the selection is not within a single text block (`!$from.sameParent($to) || !$from.parent.isTextblock`). Both handlers then return `false`, so a selection that spans a paragraph boundary is handled by the native `readDOMChange` path — the exact path this PR replaces. `handleReplacement` runs for it, but it operates on the slice the browser already built, so the "absorbed surrounding text" corruption is not prevented for multi-block selections.
+**Problem:** `buildTrackedReplacement` returns `null` when the selection is not within a single text block (`!$from.sameParent($to) || !$from.parent.isTextblock`, lines 528–530). Both handlers then return `false` (keydown 802–804, beforeinput 742–744), so a selection that spans a paragraph boundary is handled by the native `readDOMChange` path — the exact path this PR replaces. `handleReplacement` additionally bails on block content (`if (hasBlockContent) return;`, line 212), so a cross-block replacement is not tracked by the new logic at all.
 
-**Impact:** The reported symptom can still occur when the user selects across two or more paragraphs and types. This is an edge case relative to the ticket's single-paragraph reproduction, and there is no test covering it, so it may be mistaken for "fully fixed."
+**Impact:** For selections spanning two or more paragraphs, the interception does not apply. The reported symptom (deleted text reintroduced, or the edit going untracked) can therefore still occur in the multi-block case. This is an edge case relative to the ticket's single-paragraph reproduction, and there is no test covering it, so it may be mistaken for "fully fixed."
 
 **Fix:** Acceptable to ship as a documented limitation, but call it out in the PR description / manual test plan so QA doesn't assume multi-block is covered. If a fuller fix is wanted later, `buildTrackedReplacement` could iterate per-textblock across the selection rather than bailing.
 
-### 2. `resolveBeforeInputRange` can yield out-of-range positions if `posAtDOM` returns `-1`
+### 2. ~~`resolveBeforeInputRange` can yield out-of-range positions if `posAtDOM` returns `-1`~~ — RETRACTED (false positive)
+
+**Verdict: Invalid — retracted after verifying `prosemirror-view` source.**
 
 **[File: packages/wysiwyg/src/extensions/trackChanges-v2/plugins/tracking.ts]**
 
 **Function/Class:** resolveBeforeInputRange
 
-**Severity:** low
+**Severity:** none (not a defect)
 
-**Problem:** `view.posAtDOM(...)` is typed to return a `number`, so the `typeof start === "number"` guard is always true and does not reject a `-1` (the value ProseMirror returns when the DOM node can't be mapped into the document). A `{ from: -1, to: … }` then flows into `buildTrackedReplacement`, whose `state.doc.resolve(from)` will throw. The surrounding `try/catch` only wraps the `posAtDOM` block, not the downstream `buildTrackedReplacement` call, so the throw would surface uncaught in the `beforeinput` DOM handler.
+**Original claim:** that `view.posAtDOM(...)` could return `-1`, slip past the `typeof start === "number"` guard, and later throw inside `buildTrackedReplacement` uncaught.
 
-**Impact:** Very unlikely in practice (target ranges from `insertText`/`insertReplacementText` point inside the contenteditable), but if it did occur the keystroke would be dropped and an error logged instead of falling back to native handling.
+**Why it is invalid:** In the installed `prosemirror-view`, `posAtDOM` does **not** return `-1` — it throws a `RangeError` when the DOM position can't be mapped:
 
-**Fix:** Reject non-positive/out-of-bounds positions before returning:
-
-```typescript
-const max = view.state.doc.content.size;
-
-if (
-  start >= 0 &&
-  end >= 0 &&
-  start <= max &&
-  end <= max
-) {
-  return { from: Math.min(start, end), to: Math.max(start, end) };
+```javascript
+posAtDOM(node, offset, bias = -1) {
+    let pos = this.docView.posFromDOM(node, offset, bias);
+    if (pos == null)
+        throw new RangeError("DOM position not inside the editor");
+    return pos;
 }
-// else fall through to the editor selection
 ```
 
+Both `posAtDOM` calls sit **inside** the `try { … } catch (_) { /* fall through to the editor selection */ }` block, so any such throw is caught and the function correctly falls back to `view.state.selection`. There is therefore no `-1` value and no uncaught-throw path. The `typeof start === "number"` check is redundant (always true) but harmless — a cosmetic nit at most, not a bug. **No change required.**
+
 ### 3. The DOM-event wiring itself is not unit-tested
+
+**Verdict: Valid (confirmed — test file only mentions the handlers in a comment).**
 
 **[File: packages/wysiwyg/src/extensions/trackChanges-v2/plugins/tracking.test.ts]**
 
@@ -96,7 +99,7 @@ if (
 
 **Severity:** low
 
-**Problem:** Tests exercise `buildTrackedReplacement` and `handleReplacement` directly (good coverage of the builder), but the interception layer — key filtering (`ctrl/meta/alt/isComposing/length !== 1`), the `insertText` vs `insertReplacementText` branch, `event.data` vs `dataTransfer` extraction, `getTargetRanges` resolution, and the `preventDefault`/`dispatch` flow — is only "verified manually in the editor" per the code comments. The `keydown` vs `beforeinput` split is the heart of the "first time wrong" fix, so it carries real regression risk with zero automated coverage.
+**Problem:** Tests exercise `buildTrackedReplacement` and `handleReplacement` directly (good coverage of the builder), but the interception layer — key filtering (`ctrl/meta/alt/isComposing/length !== 1`), the `insertText` vs `insertReplacementText` branch, `event.data` vs `dataTransfer` extraction, `getTargetRanges` resolution, and the `preventDefault`/`dispatch` flow — is only "verified manually in the editor" per the code comments. Confirmed: `createKeyDownHandler` / `createBeforeInputHandler` / `resolveBeforeInputRange` are never invoked in the test file (only referenced once in a prose comment). The `keydown` vs `beforeinput` split is the heart of the "first time wrong" fix, so it carries real regression risk with zero automated coverage.
 
 **Impact:** A future refactor of the handlers (e.g. changing the inputType filter) could silently reintroduce the bug and all unit tests would still pass.
 
@@ -104,13 +107,15 @@ if (
 
 ### 4. Own-insertion detection now ignores the local insertion DecorationSet — a narrow collaboration trade-off
 
+**Verdict: Valid (confirmed — the deletion path does use the DecorationSet fallback).**
+
 **[File: packages/wysiwyg/src/extensions/trackChanges-v2/plugins/tracking.ts]**
 
 **Function/Class:** classifyOverwrittenNode
 
 **Severity:** low
 
-**Problem:** By design (and correctly, to fix the stale-decoration first-edit bug), `classifyOverwrittenNode` detects "the user's own pending insertion" from the **track-change mark only**, deliberately not the local insertion `DecorationSet`. The keyboard deletion path (`handleRangeDeletion`) still consults `hasLocalInsertionDecoration` as a fallback for the PP-1774 Path B scenario, where Collaboration/Yjs strips the INSERTION mark. This means the replace path and the delete path use *different* detection rules for the same concept.
+**Problem:** By design (and correctly, to fix the stale-decoration first-edit bug), `classifyOverwrittenNode` detects "the user's own pending insertion" from the **track-change mark only**, deliberately not the local insertion `DecorationSet`. The keyboard deletion path still consults `hasLocalInsertionDecoration` as a fallback for the PP-1774 Path B scenario, where Collaboration/Yjs strips the INSERTION mark — confirmed at `keyboard/handleDeletion.ts:602` and `:701`. This means the replace path and the delete path use *different* detection rules for the same concept.
 
 **Impact:** In a live collaboration session where Yjs has stripped the INSERTION mark from a user's own not-yet-accepted insertion, overwriting that insertion via replace-over-selection would classify it as `"mark"` (original) and turn it into a struck-through deletion, instead of dropping it — a PP-1774-style residue confined to the replace path. This is a narrow corner (requires the mark to have been stripped) and is not covered by tests (the 4 Yjs/browser-DOM tests are skipped). It is an accepted trade-off: consulting the DecorationSet here is exactly what caused the PP-1822 stale-decoration bug.
 
@@ -163,10 +168,10 @@ Run in place against `fix/PP-1822-wysiwyg-replacing-selected-text-reintroduces-d
 
 **Approve with suggestions.**
 
-The core fix is correct, root-cause-focused, and well-tested for the single-text-block case that matches the ticket's reproduction. The PR's own package passes test / typecheck / lint / build. No high- or medium-severity code issues were found.
+The core fix is correct, root-cause-focused, and well-tested for the single-text-block case that matches the ticket's reproduction. The PR's own package passes test / typecheck / lint / build. After the verification pass, no high- or medium-severity code issues remain (the one crash-path concern was retracted as a false positive — Issue 2).
 
 1. **Not a blocker for this PR, but flag to the team:** a clean repo-wide `npx turbo run test` and `npx turbo run lint` currently fail on two **unrelated, pre-existing** items — `packages/shared/utils/formatWordQuantity.test.ts` (en-IN locale grouping in the run environment) and `apps/creative-portal/.../JobReturnTimesTray/index.test.tsx` (prettier). Neither is in `packages/wysiwyg`. CLAUDE.md requires a green run before merge, so these should be resolved on `develop` (or confirmed as environment-only) so the branch can go green.
-2. Add the small robustness guard in `resolveBeforeInputRange` for `posAtDOM === -1` (Issue #2).
-3. Add thin handler-level tests for the `keydown`/`beforeinput` interception, or record it in the manual test plan (Issue #3).
-4. Call out in the PR description that **cross-paragraph** replace-over-selection is not covered by the interception and can still reintroduce deleted text (Issue #1) — so QA and the ticket's acceptance check are scoped correctly.
-5. Add a one-line comment marking the intentional divergence between the replace path (mark-only detection) and the deletion path (DecorationSet fallback) so it isn't "fixed" later (Issue #4).
+2. Add thin handler-level tests for the `keydown`/`beforeinput` interception, or record it in the manual test plan (Issue #3).
+3. Call out in the PR description that **cross-paragraph** replace-over-selection is not covered by the interception and can still reintroduce deleted text (Issue #1) — so QA and the ticket's acceptance check are scoped correctly.
+4. Add a one-line comment marking the intentional divergence between the replace path (mark-only detection) and the deletion path (DecorationSet fallback) so it isn't "fixed" later (Issue #4).
+5. Optional nit: drop the redundant `typeof … === "number"` guard in `resolveBeforeInputRange` (always true), or leave as-is — no functional impact (Issue #2).
