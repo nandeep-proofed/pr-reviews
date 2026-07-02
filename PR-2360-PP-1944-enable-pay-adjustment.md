@@ -2,11 +2,7 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2360
 **Jira:** https://proofed.atlassian.net/browse/PP-1944
-**Status:** In Progress
-**Head:** `feature/PP-1944-enable-pay-adjustment` @ `d5d65c8bc` → `develop`
-**Size:** 24 files, 17 commits, +1546 / −89 · `mergeable_state: clean`
-
-> **Review note (v3.2 — full re-review, supersedes v1/v2):** Since v2, two ticket updates from the PO (Orlin) landed and are now implemented: **(point 1)** the finalised Reason table — flow-specific Pay reasons + a conditional "Additional details" requirement; and **(point 3)** the standalone **User** field changed from "active editors" to **active users**, fetched up front (OMS User Search status filter) to match the job-assignment dropdown UX. The "no negative quantity" instruction is covered by keyboard **and paste** guards. **Update (v3.2):** review Issues **2 (paste guards)**, **5 (render tests)** and **6 (PR description)** are now resolved — see below.
+**Status:** Code Review
 
 ---
 
@@ -14,133 +10,238 @@
 
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
-| 1.1 Add "Pay" to Adjustment Type, both flows | `adjustmentTypeOptions` includes Pay; enabled in both | ✅ |
-| 1.2 Charge default | Opens on "Select Adjustment Type" placeholder (design-confirmed deviation) | ⚠️ Superseded (deliberate) |
-| 2.1 USD, not changeable | `ChargeCurrencySync` forces `chargeCurrencyCode = "USD"` for Pay | ✅ |
-| 2.2 Unit+Rate+Quantity → auto Amount, not editable | `PayAmountCalculator` → `calculatePayAmount` = `rate × (qty / unit)` | ✅ |
-| 2.3 +/- sign, negatives allowed, zero not | `applyAmountSign` preserves sign; Rate/Quantity blocked from negative (keyboard + paste) so the toggle owns the sign; amount≠0 (form + BFF) | ✅ |
-| 2.4 Quantity → 3 quantity fields | `buildCompensationPayload` writes quoted/userEntered/approved | ✅ |
-| 2.5 Description ≤200, Reason(+details), colon/pipe | `composeAdjustmentDescription` (colon No-Order / pipe order-linked); ≤200 (schema + BFF) | ✅ |
-| 3. Job-linked Pay: ellipsis, Job, derived Unit, Rate/Quantity | `PayAdjustmentSection`: gate on Job → derived disabled Unit → Rate/Quantity; editor from `selectedJob.proofedUserId` | ✅ |
-| 4. Standalone Pay: "+", **active-user** search, selectable Unit Hourly/Words/Fixed | `PayStandaloneSection` + `hooks.ts`: active-user list fetched up front (`searchBy: "status"`, `userStatus: "A"`), react-select filters by name; Unit gates Rate/Quantity | ✅ |
-| 4. "Project (optional)" standalone | Deferred per ticket; no Compensation field | ✅ Correctly omitted |
-| 5. **Pay reasons per flow + conditional Description (table)** | `jobLinkedPayReasonOptions` (6) / `noOrderPayReasonOptions` (12); `payReasonRequiresDetails` + schema `.when([adjustmentType, reason])` make Details required for the "Y" rows | ✅ |
-| 6. Pay → compensation; toast+close; Discard/X | `handleSubmit` Pay branch → `createCompensation`; success toast + `onClose` | ✅ |
-| API: `POST /api/Compensations`, EntryType "A", USD, jobId only when job-linked | BFF `pages/api/compensations` → `addCompensation` → `COMPENSATION`; payload per OMS spec | ✅ |
-
-**Reason table cross-check (req 5):** verified row-by-row against the ticket. Job-linked = Over Payment / Under Payment / Deduction / Unsupported Service / Bonus / Other (all require Details). No-Order = Order Assignment, Order Processing, Client Comms, Client Meeting, Style Guide Management, Team Management, Reviewer Meeting, Training, Other, Internal Training, Internal Meeting, 1:1 — only **Other / Internal Meeting / 1:1** require Details. The `payReasonRequiresDetails` set matches exactly. ✅
-
-No scope creep beyond the deliberate, confirmed deviations.
+| 1.1 Add "Pay" to Adjustment Type dropdown in both flows | `adjustmentTypeOptions` now `[Charge, Pay]`; selector `isDisabled` only when `options.length <= 1`, so Pay is selectable in both the order and No Order flows | ✅ Addressed |
+| 1.2 Charge remains the default | No type is pre-selected — opens on the "Select Adjustment Type" placeholder (`DEFAULT.adjustmentType = ""`) | ⚠️ Intentional deviation — PR states the design's first-open placeholder supersedes req 1.2 (confirmed with team) |
+| 2.1 Currency always USD, not changeable | `ChargeCurrencySync` forces `chargeCurrencyCode = "USD"` when `adjustmentType === "pay"`; no currency selector; payload omits currency (OMS defaults USD) | ✅ Addressed |
+| 2.2 Amount auto-calculated, not directly editable | Auto-calc via `PayAmountCalculator` (`calculatePayAmount`) ✅, but the `FormikAmountToAdjust` input is **not disabled** for Pay, so it can be typed into | ⚠️ Partial — see Issue #1 |
+| 2.3 +/- toggle sets sign; negative allowed, zero rejected | `applyAmountSign` preserves the toggle sign across recalcs; schema `valid-amount` test rejects 0 (front) + `non-zero-amount` (BFF) | ✅ Addressed |
+| 2.4 Quantity written to all 3 quantity fields | `buildCompensationPayload` writes `quantity` to `quotedPayQuantity`/`userEnteredQuantity`/`approvedPayQuantity` | ✅ Addressed |
+| 2.5 Description = Reason (+ details), 200 max, colon (No Order) / pipe (order) | `composeAdjustmentDescription` (colon vs pipe) + schema `description-max-length` (200) + BFF `max(200)` | ✅ Addressed |
+| 3.1 Job-linked only via completed-order ellipsis | Entry point unchanged | ✅ Addressed |
+| 3.2 Order ID pre-populated and disabled | `orderIdString` from order, `FormikInput ... disabled` | ✅ Addressed |
+| 3.3 Job select; editor derived from job assignee; no user search | `PayAdjustmentSection` derives `proofedUserId` from `selectedJob.proofedUserId` (Job type exposes it); no user search in this flow | ✅ Addressed (editor not displayed — see Issue #4) |
+| 3.4 Unit derived from job; rate/quantity follow unit | Unit select is `isDisabled`, value derived from `selectedJob.jobTasks[0].payUnit`; Words → number cell, else DurationInput | ✅ Addressed |
+| 4.1 Standalone via "+" → Adjustment, No Order mode | `PayStandaloneSection` rendered when `isNoOrder && adjustmentType === "pay"` | ✅ Addressed |
+| 4.2 Order ID shows "No Order ID", disabled | Default `orderIdString = "No Order ID"` | ✅ Addressed |
+| 4.3 Required User field (active-user search/select) | `useUsersQuery({ searchBy: "status", userStatus: "A" })`; searchable select; schema requires `proofedUserId` for Pay | ✅ Addressed |
+| 4.4 Unit selectable Hourly/Words/Fixed | `payUnitOptions = [Hourly 60, Words 1000, Fixed 1]`; rate postfix `ph`/`pkw`/`pq` | ✅ Addressed |
+| 5.1 Reason dropdown per flow | `jobLinkedPayReasonOptions` / `noOrderPayReasonOptions` selected by flow | ✅ Addressed |
+| 5.2 Description mandatory for certain reasons | `payReasonRequiresDetails` + schema `details.when(...)`; matches the "Y" rows of the ticket table | ✅ Addressed |
+| 6.1 Pay creates a compensation record (job-linked→Job, standalone→editor) | `useCreateCompensationMutation` → `POST /api/compensations` → `addCompensation`; `jobId` only when job-linked | ✅ Addressed |
+| 6.2 Success closes modal + success toast; Discard/X close without submit | Success toast "Adjustment created successfully" + `onClose()`; cancel/close unchanged | ✅ Addressed |
+| Standalone "Project (optional)" deferred | Omitted intentionally | ✅ Intentional deviation (per ticket) |
 
 ---
 
 ## Architecture Analysis
 
-- **Service / BFF** mirror the Charge pattern exactly: `services/compensations` (`useCreateCompensationMutation`) → `pages/api/compensations` → `api/compensations` handler (`makeMethodToHandlerMapping` + `withApiMiddleware` + Yup body schema) → `addCompensation` (`prepareServiceAxiosConfigWithData`). Registry `compensation → "COMPENSATION"` confirmed.
-- **Modal** keeps `index.tsx` UI-only; logic in `hooks.ts` + partials. Job-linked (`PayAdjustmentSection`) and standalone (`PayStandaloneSection`) share the same field components and behaviour — gate Rate/Quantity (on Job vs Unit), placeholder→affix display, reset-on-change, keyboard + paste guards.
-- **Reuse:** both flows use the order-create cells `EditableInputTextCell` / `HourlyInputTextCell`, made usable outside react-table (`Partial<CellProps>` + prop-forwarding) — **backward-compatible** (order-create `QuantityCell` test still green). Keyboard/paste guards live once in `utils.ts`.
-- **Standalone User search (point 3)** uses the same OMS **User Search** API as the assignment flow, parameterised for "all active users" (`searchBy: "status"`, `userStatus: "A"`) since No-Order Pay has no org group and req 4.3 wants any active user. The list is fetched on modal open; react-select filters client-side — so the dropdown is pre-populated like the assignment UI.
-- **Pure helpers** (`calculatePayAmount` / `applyAmountSign` / `buildCompensationPayload` / `composeAdjustmentDescription` / `payReasonRequiresDetails`) extracted for unit testing; a `@testing-library/react` render test covers the flow wiring (46 tests total).
+The change is well-structured and follows established repo conventions closely.
+
+- **BFF / service layer** mirrors the existing Charge stack almost 1:1: `api/compensations/{createCompensation,index,schema,types}.ts` + `api/utils/compensations/addCompensation.ts` + `pages/api/compensations/index.ts` + `services/compensations`. `addCompensation` and `createCompensation` are structural twins of `addCharge`/`createAdjustmentCharge` (same middleware, `prepareServiceAxiosConfigWithData("compensation", …)`, `requesterId` header, `handleEndpointError`). Route registration is added in both `apiRoutes` (`compensations`) and `b2bRoutesMap` (`compensation → COMPENSATION`).
+- **Pure logic is extracted and unit-tested**: `calculatePayAmount`, `applyAmountSign`, `buildCompensationPayload`, `composeAdjustmentDescription`, `payReasonRequiresDetails`, and the paste/keydown guards all live in `utils.ts`/`consts.ts` and are covered by `utils.test.ts` / `consts.test.ts`. The `index.tsx` stays UI-only and delegates to `hooks.ts`, consistent with the project's component conventions.
+- **Reuse-first**: `HourlyInputTextCell` and `EditableInputTextCell` are reused for the Rate/Quantity fields instead of new inputs, with their prop types widened to support form-mode usage (`FormikDurationInputProps`, `Partial<CellProps>`). Both widenings are type-permissive and the sole existing `HourlyInputTextCell` consumer (`ChargeTable/partials/QuantityCell`) passes only `name`, so there is no regression.
+- **Unit encoding** is correct: `HOURLY_UNIT_VALUE = 60`, `WORDS = 1000`, `FIXED = 1`; `DurationInput` stores minutes, so `rate × (minutes / 60)` yields rate-per-hour × hours. Matches the OMS payload examples in the ticket.
+
+The approach is sound. The findings below are refinements, not blockers.
 
 ---
 
 ## Issues Found
 
-### 1. Standalone Pay loads the full active-user list up front (no scope)
+### 1. Amount field is directly editable in the Pay flow
 
-**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/hooks.ts]**
+**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/index.tsx]**
 
-**Function/Class:** useAdjustPayOrChargeModal — `editors` query
+**Function/Class:** AdjustPayOrChargeModal (FormikAmountToAdjust `disabled` prop)
 
-**Severity:** low-medium
+**Severity:** medium
 
-**Problem:** `useUsersQuery({ searchBy: "status", userStatus: "A" })` fetches **every active user** when the No-Order modal opens, then react-select filters client-side. This matches the assignment-dropdown UX (pre-populated), but the job-assignment flow bounds its list by `organizationGroupId` + role; standalone Pay has neither, so the payload is the entire active-user set.
+**Problem:** Req 2.2 states the Amount "is calculated automatically from Rate, Unit, and Quantity and is not directly editable." For Pay, the `disabled` expression evaluates to `false` (once charges finish loading in the job-linked flow), so the underlying `<Input type="number">` inside `FormikAmountToAdjust` remains user-editable. `PayAmountCalculator` only overwrites `amount` when `rate`/`quantity`/`unit` *change*, so a value typed directly into the Amount field persists and is submitted verbatim via `buildCompensationPayload` (`amount: parseFloat(values.amount)`).
 
-**Impact:** Fine for a modest user count; if the active-user population is large, this is a heavier initial fetch + a large option list for react-select to render/filter. No correctness issue.
+**Impact:** An admin can submit a compensation whose `amount` does not equal `payRate × (quantity / payUnit)`. Because this record feeds the monthly Wise payout, an inconsistent amount vs. rate/quantity is a financial-integrity concern. Easily triggered (enter rate+quantity, then edit the amount), though the auto-recalc mitigates the accidental case.
 
-**Fix:** Acceptable as-is per the requirement (active users, assignment-style list). If scale becomes a concern, switch to a debounced server search (`searchBy: "name"` + `userStatus: "A"`) with a low character threshold, or virtualise the option list.
+**Fix:** Disable the amount input for Pay so the +/- toggle stays the only control over the value (the toggle button already has its own `disabled` handling and remains usable). If the team intends Pay amounts to be overridable (a deliberate reuse tradeoff), confirm with the PO and update the ticket instead. Example:
 
-### 2. Keyboard guards don't cover paste / programmatic input — ✅ Resolved (commit `31982fbd5`)
+```tsx
+disabled={
+  !values.adjustmentType ||
+  values.adjustmentType === "pay" ||
+  (isNoOrder &&
+    values.adjustmentType === "charge" &&
+    (!values.organizationGroupId || isFetchingProjects)) ||
+  (!!orderId && !isNoOrder && isChargesLoading)
+}
+```
 
-**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/utils.ts]**
+Note: `FormikAmountToAdjust` hides the +/- toggle when `disabled` (`prefix={!disabled ? currencyToggle : undefined}`), so a plain `disabled` would also remove the sign control. If you disable the field, keep the toggle working by using the input's own read-only path rather than the wrapper-level `disabled`, or add a `readOnly`/`isAmountEditable` prop to `AmountToAdjust`.
 
-**Function/Class:** `allowOnlyDigitsPaste`, `blockNegativeNumberPaste`
+### 2. New BFF route, schema, and service have no dedicated tests
 
-**Severity:** low
+**[File: apps/creative-portal/api/compensations/schema.ts]**
 
-**Problem:** The `onKeyDown` guards blocked *typing* a negative Rate / non-digit Quantity but not a **pasted** value — a pasted `-16` could reintroduce a negative magnitude and double the Amount sign (the +/- toggle already owns the sign).
-
-**Resolution:** Added `onPaste` guards mirroring the order-create `QuantityCell` — `allowOnlyDigitsPaste` (Quantity: digits only) and `blockNegativeNumberPaste` (Rate: digits + one optional decimal; blocks sign/exponent/symbol) — wired to Rate/Quantity in both `PayAdjustmentSection` and `PayStandaloneSection`. The calculator was intentionally left unchanged (no `Math.abs` — the earlier decision was to block negative *entry* instead). 4 unit tests added.
-
-### 3. Rate "$" prefix relies on a key-remount workaround
-
-**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/partials/PayAdjustmentSection/index.tsx & PayStandaloneSection/index.tsx]**
-
-**Function/Class:** Rate field `key`
-
-**Severity:** low (info)
-
-**Problem:** The Rate field is remounted (`key` keyed on job/unit presence) to force the shared `usePrefixInputIndent` hook to re-measure the `$` prefix width — that hook only measures on mount, so a conditionally-rendered prefix would otherwise overlap the value.
-
-**Impact:** Works; localized workaround for a shared-hook limitation.
-
-**Fix (optional):** Make `usePrefixInputIndent` re-measure when the prefix element appears (callback ref) — removes the remount, app-wide.
-
-### 4. Non-null assertions in the payload builder
-
-**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/utils.ts]**
-
-**Function/Class:** buildCompensationPayload
+**Function/Class:** createCompensationSchema / createCompensation / addCompensation / postCreateCompensation
 
 **Severity:** low
 
-**Problem:** `proofedUserId: values.proofedUserId as number` and `payUnit: values.unit as number` cast away `null`. Safe — Pay validation guarantees them before submit — but bypasses TS null-safety.
+**Problem:** The 42 new tests thoroughly cover the front-end logic (`utils`, `consts`, schema rules, and modal rendering), but the BFF layer added by this PR — the Yup `createCompensationSchema` (incl. the `non-zero-amount` test), the `createCompensation` handler, `addCompensation`, and the `postCreateCompensation` service — has no direct tests. CLAUDE.md requires tests for new code.
 
-**Fix:** Optional — narrow instead of asserting. (Note: `Number(null)` → `0` is a valid-looking id, so a naive narrow would be a subtle regression; keep the validation contract or add an explicit guard.)
+**Impact:** Regressions in the server-side validation (e.g. the non-zero-amount rule or the required-field set) or the service-registry wiring would not be caught by unit tests. Risk is contained because the handler/service are near-exact mirrors of the existing (also lightly-tested) Charge equivalents.
 
-### 5. No component/render tests for the new UI behaviour — ✅ Resolved (commit `d5d65c8bc`)
+**Fix:** Add a small `schema.test.ts` asserting the required-field set and the `non-zero-amount` rejection, mirroring the front-end schema tests. A handler test is optional given the 1:1 parity with `createAdjustmentCharge`.
 
-**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/index.test.tsx]**
+### 3. Nested ternaries with inline eslint-disable in the JSX
 
-**Function/Class:** modal component behaviour
+**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/index.tsx]**
 
-**Severity:** low-medium
+**Function/Class:** AdjustPayOrChargeModal (reason `options` and details `placeholder`)
 
-**Problem:** Pure logic was well covered (42 unit tests), but the **UI wiring** from points 1 & 3 — per-flow Reason rendering, section swap (Charge vs job-linked vs standalone), the active-user options, and the reason-driven details placeholder — had no render coverage.
+**Severity:** low
 
-**Resolution:** Added `index.test.tsx` — a `@testing-library/react` render test using a Formik-integrated `FormikSelect` mock (service hooks + heavy leaf components mocked, real Formik + partials). Four cases: Charge (Charge reasons, no Pay section); Job-linked Pay (Job field + 6 job-linked reasons); Standalone Pay (active-user field + 12 No-Order reasons, no Job field); details placeholder flipping required↔optional with the chosen reason. Modal suite now **46 tests**. The heavier field internals (affix/remount, `HourlyInputTextCell` duration entry) remain live-verified only.
+**Problem:** Both the Reason `options` and the details `placeholder` use nested ternaries suppressed with `// eslint-disable-next-line no-nested-ternary`. The flow-selection logic (charge vs No-Order Pay vs job-linked Pay) is duplicated inline in the render.
 
-### 6. PR description is stale — ✅ Resolved
+**Impact:** Minor readability/maintainability; two places must be kept in sync with the reason/placeholder rules.
 
-**[File: PR #2360 description]**
+**Fix:** Extract small helpers (e.g. `getReasonOptions({ adjustmentType, isNoOrder })` and `getDetailsPlaceholder({ adjustmentType, reason })`) into `consts.ts`/`utils.ts` — they'd also be trivially unit-testable and remove the disable comments.
 
-**Severity:** low (housekeeping)
+### 4. Job-linked flow derives the editor but never displays it
 
-**Problem:** The PR body still described the pre-update state — Pay reasons "Overpayment/Underpayment/Deduction/Bonus", a name type-ahead User search, and an open "filter to editor role?" follow-up. Points 1 & 3 changed all three.
+**[File: apps/creative-portal/components/organisms/modals/AdjustPayOrChargeModal/partials/PayAdjustmentSection/index.tsx]**
 
-**Resolution:** PR description refreshed to reflect the per-flow reasons + conditional details, the active-user list (fetched up front), and the keyboard + paste guards; the resolved follow-up was removed.
+**Function/Class:** PayAdjustmentSection
+
+**Severity:** low
+
+**Problem:** Req 3.3 says the editor is derived from the selected job's assignee. The code correctly sets `proofedUserId` from `selectedJob.proofedUserId`, but nothing in the UI shows *which* editor will be paid. If the selected job has no assignee (`proofedUserId` null), `proofedUserId` stays null and the form fails validation with "User is required" — but there is no User field in this flow, so the error has no visible anchor and the admin gets a dead-end with no explanation.
+
+**Impact:** For completed orders with an assigned editor this is invisible (works fine). The dead-end only occurs on an unassigned job, which the ticket's preconditions exclude — hence low severity. Displaying the derived editor would also improve confidence for the admin.
+
+**Fix:** Optionally render the derived editor name (read-only) once a job is selected, and/or guard the Job options to jobs that have an assignee. Confirm against the Figma whether the editor name is expected to be shown in this flow.
+
+---
+
+## Code-Quality Review (`/simplify`)
+
+A separate cleanup pass (reuse / simplification / efficiency / altitude — **not** a
+correctness/bug review) run across the diff via four parallel review agents. These are
+observations only — no fixes/action items and nothing applied to the branch. Line numbers
+are on the PR branch. Q5 overlaps with Issue #3 above and is not repeated.
+
+### High-impact
+
+#### Q1. The two Pay sections duplicate the whole Unit → Rate → Quantity block (~50 lines)
+
+**[Files: partials/PayAdjustmentSection/index.tsx:84-137 vs partials/PayStandaloneSection/index.tsx:63-121]** · **reuse/simplification**
+
+The Rate `<Box>` is verbatim-identical except the gate field (`values.jobId` ↔ `values.unit`);
+the Quantity `<Box>` is the same 3-branch pattern (disabled-dash / hourly-input /
+words-fixed-input) with the branches reordered. Every placeholder/prefix/postfix/guard tweak
+must be made in both copies and kept in sync (the reordered Quantity branches already show
+minor drift).
+
+#### Q2. Digit/paste guards re-implement the order-create QuantityCell guards
+
+**[File: components/organisms/modals/AdjustPayOrChargeModal/utils.ts]** · **reuse**
+
+`ALLOWED_QUANTITY_KEYS` is byte-identical to `ALLOWED_NAVIGATION_KEYS` in
+`ChargeTable/partials/QuantityCell/index.tsx:22-34`, and `allowOnlyDigitsKeyDown` /
+`allowOnlyDigitsPaste` match the QuantityCell inline handlers (the code comments even say
+"Mirror the order-create Quantity cell"). Two copies that will drift.
+`blockNegativeNumberKey` / `blockNegativeNumberPaste` (Rate) are genuinely new — no existing
+equivalent.
+
+#### Q3. `ratePostfix` is computed two different ways — and they disagree for Fixed-rate
+
+**[Files: PayAdjustmentSection/index.tsx:71-72 and PayStandaloneSection/index.tsx:42-49]** · **reuse/simplification**
+
+Job-linked uses `getServiceShortUnit(mapUnit(String(selectedJobUnit))) || "ph"`; standalone uses
+a 4-branch nested ternary → `pkw`/`ph`/`pq`/`""`. `getServiceShortUnit` returns `""` for Fixed,
+so a Fixed unit renders **`"ph"` in one section but `"pq"` in the other**. (Fixed isn't reachable
+in the job-linked flow today, but the two representations will keep drifting.)
+
+### Medium
+
+#### Q4. `payReasonRequiresDetails` uses a parallel `Set` that can drift from the reason lists
+
+**[File: consts.ts:50-63 (Set) vs consts.ts:196-221 (option arrays)]** · **altitude**
+
+"Requires details" is a flat `Set<string>` of reason labels, separate from the arrays that define
+those labels — rename a reason and the Set silently goes stale (no type error). Drift is already
+visible in the test suite (`"Under Payment"` vs `"Underpayment"`).
+
+#### Q5. Nested ternaries with inline `eslint-disable` in the JSX
+
+**[File: index.tsx:180-187 (reason options) and index.tsx:194-201 (details placeholder)]** · **simplification**
+
+_Same as **Issue #3** above — see that entry for detail._ The flow-selection logic (charge vs
+No-Order Pay vs job-linked Pay) is duplicated inline in the render, each suppressed with a
+`no-nested-ternary` disable.
+
+#### Q6. Active-user list refetched on every modal open — no `staleTime`
+
+**[File: hooks.ts:115-119]** · **efficiency**
+
+`useUsersQuery({ searchBy: "status", userStatus: "A" }, { enabled })` passes only `enabled`; the
+shared QueryClient sets no default `staleTime` (=0), so each No-Order modal open triggers a
+background refetch of the entire active-user list. The sibling `useUsersHeadshotPhotoUrl`
+(`services/users/index.ts:71-73`) sets a `staleTime` for the same "rarely-changes list" case.
+
+#### Q7. Modal reaches into `tables/partials/*` cell components as form fields
+
+**[Files: PayAdjustmentSection/index.tsx, PayStandaloneSection/index.tsx]** · **altitude**
+
+The diff replaced `FormikInput` / `FormikDurationInput` with `EditableInputTextCell` /
+`HourlyInputTextCell`, then passes `hasErrorMessageHidden={false}` on every cell to switch off the
+wrapper's one distinguishing default — i.e. asking for plain-input behaviour while paying for a
+table-cell import. Couples an organism modal to table internals. Note: this is a deliberate,
+design-verified choice in the PR; the `Partial<CellProps>` / `FormikDurationInputProps` widenings
+called out in the Architecture Analysis are permissive and safe — Q7 is about depth, not regression.
+
+### Low / minor
+
+- **Q8. Dead `isDisabled` on the Adjustment Type select** — `index.tsx:115`
+  `isDisabled={adjustmentTypeOptions.length <= 1}` is always `false` (static 2-element array); vestige
+  of the previous single-option state.
+- **Q9. `toQuantityNumber` coercion re-inlined** — `PayAmountCalculator/index.tsx:19-22` repeats the
+  `typeof … ? … : Number(…) || 0` that `utils.ts` already defines (currently un-exported).
+- **Q10. Inline `onChange` reset handler** — `index.tsx:116-130` is a ~14-line callback
+  (`setErrors`/`setTouched`/`setValues` + a cast) in the render prop, against the repo's
+  "`index.tsx` is UI-only" convention. Borderline (the Formik helpers only exist in the render prop).
+- **Q11. `CellProps → Partial<CellProps>`** (`EditableInputTextCell/types.d.ts:14`) — the type is
+  consumed only by the cell itself, which never reads `cell/row/column/value`; `Partial<CellProps>`
+  weakens nothing real but also fixes nothing. Marginal.
+- **Q12. Yup schema repetition** — `consts.ts:130-157` has four near-identical
+  `.nullable().typeError().when(is:"pay", required)` blocks. The single-schema-with-`.when` approach
+  itself is fine (`adjustmentType` is an in-form value).
+
+### Confirmed clean (no concern)
+
+- Compensation BFF/service layer faithfully mirrors the existing `charges` house pattern.
+- `editorOptions` user → `{value,label}` mapping — no existing shared mapper to reuse.
+- `calculatePayAmount` / `applyAmountSign` correctly reuse `roundToCurrency`; no shared equivalent exists.
+- The two reset `useEffect`s in `PayAdjustmentSection` should **not** be merged (different dep arrays,
+  disjoint fields) — merging would wipe user input when `selectedJob` resolves.
+- No cascading re-render loop in `PayAmountCalculator` (guarded + `!==` check).
 
 ---
 
 ## Validation Checks
 
-Run via `npx turbo run test typecheck lint` against the PR branch (base `8294fca68`; the Issue-2 paste fix and Issue-5 render tests re-ran green for typecheck/lint + the modal suite, now 46).
-
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ✅ | Modal suite **46** (incl. 4 render tests) + order-create `QuantityCell` **6** pass. Only failure is the **pre-existing, unrelated** `@proofed/shared/utils/formatWordQuantity` locale test (1308/1309 in shared) — not touched by this PR. |
-| `npx turbo run typecheck` | ✅ | 0 errors across all workspaces (shared-cell type changes compile order-create too). |
-| `npx turbo run lint` | ✅ | 0 errors. |
-| `npx turbo run build` | ⚠️ Deferred to CI | Not run this pass; the local build has been flaky all session with post-compile, code-unrelated failures (`@emotion jsxDEV` / `MODULE_NOT_FOUND` in untouched files) after `✓ Compiled successfully`. Confirm via CI (clean container). |
+| `npx turbo run test` | ⏭️ Skipped — user opted out | PR reports pass except a pre-existing, unrelated failure in `@proofed/shared/utils/formatWordQuantity.test.ts` |
+| `npx turbo run typecheck` | ⏭️ Skipped — user opted out | PR reports ✅ |
+| `npx turbo run lint` | ⏭️ Skipped — user opted out | PR reports ✅ |
+| `npx turbo run build` | ⏭️ Skipped — user opted out | PR defers to CI |
 
 ---
 
 ## Tests
 
-- ✅ `utils.test.ts` / `consts.test.ts` — unit coverage: calculator (Words/Hourly/Fixed), `applyAmountSign`, `buildCompensationPayload` (job-linked vs standalone per OMS spec, quantity→3 fields, string coercion, negative deduction, jobId omission), schema rules (amount≠0, proofedUserId/jobId/unit/rate/quantity required, 200-char Description), `composeAdjustmentDescription`, **per-flow reason options**, **`payReasonRequiresDetails`**, **conditional Details-required** validation, and the **keyboard + paste guards**.
-- ✅ `index.test.tsx` — **render tests** (Issue 5): Charge vs job-linked vs standalone section swap, per-flow Reason options, active-user options, and the reason-driven details placeholder. Modal suite **46 tests** total.
-- ✅ Order-create `QuantityCell` (6) still passes → the shared-cell changes didn't regress.
-- ✅ Live-verified both flows (gating, placeholders/affixes, reset-on-change, USD, negative-entry blocked, deduction via toggle, per-flow reasons, pre-populated active-user select).
+- ✅ Strong front-end coverage: `utils.test.ts` (`calculatePayAmount` incl. Fixed, `applyAmountSign`, `buildCompensationPayload` job-linked vs standalone + quantity→3 fields + coercion + negative, paste guards) and `consts.test.ts` (options, `payReasonRequiresDetails`, `composeAdjustmentDescription`, schema rules incl. amount≠0, required fields, 200-char, conditional details).
+- ✅ `index.test.tsx` covers per-flow rendering (Charge reasons, job-linked Pay reasons + Job field, standalone Pay user field + No-Order reasons) and the reason-driven details placeholder.
+- ⚠️ No tests for the new BFF schema/handler/service (Issue #2).
+- ⚠️ No automated coverage for the amount-not-editable behaviour (relevant to Issue #1).
+- ⏭️ Full validation suite not run this review (user opted out) — must be run before merge.
 
 ---
 
@@ -148,23 +249,20 @@ Run via `npx turbo run test typecheck lint` against the PR branch (base `8294fca
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Matches the updated ticket (reasons table + active users) and OMS spec; Charge unchanged |
-| Regression risk | ✅ Low — additive; shared-cell changes backward-compatible (QuantityCell green) |
-| Tests | ✅ Strong unit coverage (reason/details + paste guards) **plus render tests** (section swap, per-flow reasons, details placeholder) |
-| Code quality | ✅ Good; remaining items are low (Issues 1, 3, 4) |
-| Validation suite | ✅ test / typecheck / lint pass; build deferred to CI |
-| Mergeable state | ✅ Clean |
+| Correctness | ✅ (one spec deviation — Issue #1) |
+| Regression risk | ✅ Low (type widenings are permissive; sole `HourlyInputTextCell` consumer unaffected; BFF mirrors Charge) |
+| Tests | ⚠️ Strong front-end, missing BFF-layer tests |
+| Code quality | ✅ (minor: nested ternaries, Issue #3) |
+| Validation suite | ⏭️ Skipped — user opted out |
+| Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`); validation not re-verified locally |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions — pending a green CI build.**
+**Approve with suggestions**
 
-1. **Build gate:** confirm a green build in CI (local failures were flaky/code-unrelated; not a code blocker).
-2. ✅ **(Issue 2 — done, `31982fbd5`)** Paste guards added to Rate/Quantity.
-3. ✅ **(Issue 5 — done, `d5d65c8bc`)** Modal render tests added (section swap, per-flow reasons, details placeholder).
-4. ✅ **(Issue 6 — done)** PR description refreshed.
-5. **(Issue 1, low-med)** Standalone Pay loads the full active-user list — fine per the requirement; revisit (debounced server search / virtualised list) only if the active-user count grows large.
-6. **(Issues 3–4, low)** Optional: fix `usePrefixInputIndent` to drop the key-remount; narrow the payload assertions.
-7. **Process:** run `/security` before merge (per workflow).
+1. **Re-run the mandatory validation suite** (`test` / `typecheck` / `lint` / `build`) against the PR branch before merge — it was not run in this review. Confirm the only failing test is the pre-existing, unrelated `formatWordQuantity.test.ts` locale case and that the build is clean in CI.
+2. **Decide on Issue #1 (amount editability for Pay).** Either disable direct editing of the Amount for Pay (keeping the +/- toggle functional), or confirm with the PO that overridable amounts are intended and amend req 2.2. This is the only finding with financial impact.
+3. Add BFF-layer tests for `createCompensationSchema` (Issue #2) to satisfy the "tests for new code" rule.
+4. Optional polish: extract the reason-options / details-placeholder helpers (Issue #3); display or guard the derived editor in the job-linked flow (Issue #4).
