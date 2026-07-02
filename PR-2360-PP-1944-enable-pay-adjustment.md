@@ -60,19 +60,6 @@ The approach is sound. The findings below are refinements, not blockers.
 
 **Impact:** An admin can submit a compensation whose `amount` does not equal `payRate × (quantity / payUnit)`. Because this record feeds the monthly Wise payout, an inconsistent amount vs. rate/quantity is a financial-integrity concern. Easily triggered (enter rate+quantity, then edit the amount), though the auto-recalc mitigates the accidental case.
 
-**Fix:** Disable the amount input for Pay so the +/- toggle stays the only control over the value (the toggle button already has its own `disabled` handling and remains usable). If the team intends Pay amounts to be overridable (a deliberate reuse tradeoff), confirm with the PO and update the ticket instead. Example:
-
-```tsx
-disabled={
-  !values.adjustmentType ||
-  values.adjustmentType === "pay" ||
-  (isNoOrder &&
-    values.adjustmentType === "charge" &&
-    (!values.organizationGroupId || isFetchingProjects)) ||
-  (!!orderId && !isNoOrder && isChargesLoading)
-}
-```
-
 Note: `FormikAmountToAdjust` hides the +/- toggle when `disabled` (`prefix={!disabled ? currencyToggle : undefined}`), so a plain `disabled` would also remove the sign control. If you disable the field, keep the toggle working by using the input's own read-only path rather than the wrapper-level `disabled`, or add a `readOnly`/`isAmountEditable` prop to `AmountToAdjust`.
 
 ### 2. New BFF route, schema, and service have no dedicated tests
