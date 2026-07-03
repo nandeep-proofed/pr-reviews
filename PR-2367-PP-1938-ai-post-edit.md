@@ -81,16 +81,20 @@ The approach reuses the existing "AI collapses to `JobType.AI` for styling/statu
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ✅ | Full turbo suite pass (exit 0); + 15 new/updated cases across 5 files |
+| `npx turbo run test` (creative-portal) | ✅ | **1696 / 1696 pass** (181 files). Re-run fresh on branch. |
+| PP-1938 ticket-specific tests | ✅ | **82 / 82 pass** across the 5 touched test files (`api/orders/utils`, `TableWithFilters/utils`, `tableColumns`, `WorkflowBuilderModal/utils`, `getWorkflowsList`) |
+| `npx turbo run test` (full monorepo) | ⚠️ | 1 failure — `@proofed/shared` `formatWordQuantity.test.ts` (`'10,00,000 words'` vs `'1,000,000 words'`). **Locale-only** (en-IN lakh grouping), **not code**: passes 23/23 under `LANG=en_US.UTF-8`. Pre-existing on `develop`, in a package this PR doesn't touch. |
 | `npx turbo run typecheck` | ✅ | 0 errors (creative-portal) |
 | `npx turbo run lint` | ✅ | 0 errors on changed files; lint-staged clean at commit |
 | `npx turbo run build` | ⚠️ | **Environmental** — non-deterministic `MODULE_NOT_FOUND` at Next page-data collection (`/authentication-method`, `/availability`, `date-fns` chunk). **Reproduces on clean `develop` with changes stashed**; webpack compile succeeds every run. Not caused by this PR. |
 
-_Validation results reused from the implementation session on this branch (user opted to reuse rather than re-run)._
+_All creative-portal tests (where 100% of this PR's changes live) pass. The single monorepo failure is a pre-existing locale artifact in `@proofed/shared`, confirmed green under `en_US`/`en_GB` (i.e. CI)._
 
 ---
 
 ## Tests
+
+**Fresh run on branch:** ticket-specific 82/82 ✅ · creative-portal full suite 1696/1696 ✅ · full monorepo 1 pre-existing locale failure in `@proofed/shared` (not this PR).
 
 - ✅ Recognition (`"ai post-edit" → JobType.AI`, case-insensitive) — `api/orders/utils.test.ts`
 - ✅ Independent Pre/Post filtering incl. legacy bare-AI union — `api/orders/utils.test.ts`
@@ -109,7 +113,7 @@ _Validation results reused from the implementation session on this branch (user 
 | Regression risk | ✅ Low — additive; type-widening is a superset; one cosmetic legacy-view edge |
 | Tests | ✅ Good coverage (⚠️ cap-of-3 render path manual-only) |
 | Code quality | ✅ Idiomatic, minimal, well-commented |
-| Validation suite | ⚠️ test/typecheck/lint ✅; build environmental fail (pre-existing) |
+| Validation suite | ✅ creative-portal test 1696/1696, typecheck, lint all pass · ⚠️ 1 pre-existing locale-only failure in `@proofed/shared` + environmental build fail (neither caused by this PR) |
 | Mergeable state | ⚠️ Confirm CI build green (local build fails environmentally) |
 
 ---
