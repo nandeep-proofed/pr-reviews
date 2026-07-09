@@ -7,8 +7,9 @@
 > **Update (2026-07-09):**
 > - **Issue 1** (guard logic duplicated in three places): **resolved** — both server routes now delegate to the single `getApprovedQuantities` helper.
 > - **Issue 2** (field should not be editable): a disable-the-input change was implemented on both panels and then **discarded per the client's decision** — the Work Time field stays editable for Fixed Rate jobs. The value has no billing effect (already neutralised by the Issue-1 guard), so this is a deliberate product choice, not an open defect.
+> - **Issue 3** ("Approved Time" shows the quoted quantity for Fixed Rate): **resolved** — the "Approved Time" row is now hidden for Fixed Rate jobs (matching per-word), so it no longer renders a meaningless `0H 1M`.
 >
-> See the updated Issue 1 / Issue 2 sections and Validation Checks below.
+> See the updated Issue 1 / Issue 2 / Issue 3 sections and Validation Checks below.
 
 ---
 
@@ -71,19 +72,19 @@ The fix extracts the resolution into a `getApprovedQuantities` helper that mirro
 
 **Fix:** None planned (deferred by client). Could be revisited in a follow-up if the "not editable" UX is later requested.
 
-### 3. "Approved Time" informational displays now show quoted quantity for Fixed Rate jobs
+### 3. "Approved Time" showed the quoted quantity for Fixed Rate jobs — ✅ RESOLVED
 
-**[File: apps/creative-portal/utils/calculateJobTasksWorkAndPayTotals.ts (consumer, unchanged)]**
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderJobs/partials/JobSubmission.tsx]**
 
-**Function/Class:** consumers of `totalApprovedWorkTime` (ServiceHistoryPreview, ReviewHistoryPreview, OrderJobs/JobSubmission)
+**Function/Class:** JobSubmission (Submission accordion — "Approved Time" column)
 
 **Severity:** low
 
-**Problem:** `approvedPayQuantity` doubles as the source of `totalApprovedWorkTime`, which several surfaces render as the editor's "Approved Time". For Fixed Rate jobs this value changes from the entered minutes (e.g. `3h 0m`) to the quoted quantity (e.g. `0h 1m`).
+**Problem (original):** `approvedPayQuantity` doubles as the source of `totalApprovedWorkTime`, which the Submission preview renders as "Approved Time". For a Fixed Rate job that value is the quoted billing quantity (Qty 1), so it displayed as a meaningless `0H 1M`. The show-condition excluded per-word (`!isPerWordJob`) but not Fixed Rate.
 
-**Impact:** Cosmetic only — the real editor work time is preserved separately in `userEnteredQuantity` ("Service time" / "Editor's Work Time" rows are unaffected). No money or data loss.
+**Resolution:** Added an `isFixedRateJob` flag (`useFixedChargeQuantity && useFixedPayQuantity && !isPerWordJob`) and factored a single `hasApprovedTimeColumn` boolean (`isServiceJobOrReviewJobType && !!totalApprovedWorkTime && !isPerWordJob && !isFixedRateJob`). It now gates the "Approved Time" column **and** the Score placement (`shouldShowScore` / `shouldShowScoreInline`), so the Score stays correctly positioned when the column is hidden. The real editor work time ("Editor's Work Time", from `userEnteredQuantity`) is unaffected.
 
-**Fix:** Optional follow-up — exclude fixed-quantity tasks from `totalApprovedWorkTime` so the "Approved Time" row hides for Fixed Rate, matching per-word. Intentionally deferred to keep this PR minimal.
+**Impact:** Fixed Rate jobs no longer show the spurious `0H 1M` "Approved Time"; behaviour now matches per-word. No money or data impact.
 
 ### 4. Undefined quoted quantity passes through unchanged (pre-existing behaviour)
 
@@ -103,11 +104,11 @@ The fix extracts the resolution into a `getApprovedQuantities` helper that mirro
 
 ## Validation Checks
 
-Run on the PR branch `fix/PP-1981-fixed-rate-review-submit-quantity` (billing fix + Issue 1 de-duplication; Issue 2 reverted).
+Run on the PR branch `fix/PP-1981-fixed-rate-review-submit-quantity` (billing fix + Issue 1 de-duplication + Issue 3 "Approved Time" hide; Issue 2 reverted).
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⚠️ PR-scope pass, monorepo ❌ | creative-portal passes incl. the `getApprovedQuantities` helper tests (4/4); **1 pre-existing unrelated failure** in `packages/shared/utils/formatWordQuantity.test.ts` (locale digit-grouping), present on develop, untouched here |
+| `npx turbo run test` | ⚠️ PR-scope pass, monorepo ❌ | creative-portal passes incl. the `getApprovedQuantities` helper tests (4/4) and the OrderJobs suite (122/122, covering `JobSubmission`'s siblings); **1 pre-existing unrelated failure** in `packages/shared/utils/formatWordQuantity.test.ts` (locale digit-grouping), present on develop, untouched here |
 | `npx turbo run typecheck` | ✅ | 0 errors across all workspaces |
 | `npx turbo run lint` | ⚠️ PR-scope pass, monorepo ❌ | The changed files pass eslint (exit 0); **1 pre-existing unrelated failure** — prettier in `components/molecules/JobReturnTimesTray/index.test.tsx`, present on develop, untouched here |
 | `npx turbo run build` | ✅ | creative-portal build clean |
@@ -121,7 +122,7 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 - ✅ Unit tests for `getApprovedQuantities` (`Submission/utils.test.ts`, 4 cases): Fixed Rate, per-word, hourly, and mixed charge/pay tasks — also exercise the exact logic used by both server routes
 - ✅ Meets the "every PR must include tests" requirement
 - ✅ Manual reproduction + verification: order 21174 inflated to £11,710.83; order 21175 fixed at flat £65 (Fixed Rate, Qty 1)
-- ⚠️ No dedicated integration test for the two server routes end-to-end (logic isolated into the tested helper instead)
+- ⚠️ No dedicated unit test for `JobSubmission`'s `hasApprovedTimeColumn` gate (component has no existing test harness; change mirrors the existing untested `!isPerWordJob` guard)
 - ⚠️ No test covers the `undefined` quoted-quantity edge (Issue 4) — acceptable given it matches prior behaviour
 
 ---
@@ -143,7 +144,6 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 
 **Approve with suggestions**
 
-1. **Merge-ready** — the fix is correct, root-caused, tested, and manually verified (charge stays flat for Fixed Rate). Issue 1 is resolved (single shared guard). Issue 2 (Work Time "not editable") was **deferred per the client's decision** — the field stays editable but has no billing effect.
+1. **Merge-ready** — the fix is correct, root-caused, tested, and manually verified (charge stays flat for Fixed Rate). Issues 1 (single shared guard) and 3 ("Approved Time" hidden for Fixed Rate) are resolved. Issue 2 (Work Time "not editable") was **deferred per the client's decision** — the field stays editable but has no billing effect.
 2. **Confirm the two failing gate checks are the known pre-existing develop failures** (`formatWordQuantity` locale test, `JobReturnTimesTray` prettier) and not a merge blocker — they exist independently in untouched files.
 3. **Optional cleanup (Issue 1 caveat):** relocate `getApprovedQuantities` to `packages/shared/utils` so the API layer does not import from a UI-component path.
-4. **Consider a follow-up ticket** for the cosmetic "Approved Time" display for Fixed Rate jobs (Issue 3) — low severity, no revenue impact.
