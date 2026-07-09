@@ -82,7 +82,7 @@ The sharper, concrete sub-issue: `getApprovedQuantities` sourced `WORDS_UNIT_VAL
 
 **Resolution:** Added `JobSubmission.test.tsx` (3 cases) covering the `hasApprovedTimeColumn` gate: "Approved Time" is shown for an hourly job, hidden for a Fixed Rate job (while "Editor's Work Time" still renders from `userEnteredQuantity`), and hidden for a per-word job (guards the pre-existing behaviour). `Accordion`/`DescriptionList` are mocked to render item titles as plain text for deterministic assertions — same style as the sibling `ReviewForm` test. Typecheck, lint, and the 3 tests are green.
 
-### 4. `getApprovedQuantities` forwards `undefined` when the quoted quantity is missing
+### 4. `getApprovedQuantities` forwards `undefined` when the quoted quantity is missing — ⏭️ No change required (matches prior behaviour)
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/JobManagement/partials/Submission/utils.ts]**
 
@@ -94,7 +94,7 @@ The sharper, concrete sub-issue: `getApprovedQuantities` sourced `WORDS_UNIT_VAL
 
 **Impact:** None in practice — Fixed Rate and per-word tasks always have quoted quantities set at order creation. This matches the previous inline behaviour, so it is not a regression. Noted for completeness.
 
-**Fix:** No change required.
+**Status — No change required:** Acknowledged and intentionally left as-is; the behaviour is identical to the pre-PR inline logic, so adding a fallback would alter established behaviour for no functional gain. Not a defect.
 
 ---
 
