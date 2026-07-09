@@ -70,19 +70,17 @@ The sharper, concrete sub-issue: `getApprovedQuantities` sourced `WORDS_UNIT_VAL
 
 **Fix:** None planned — skipped by design to keep Fixed Rate consistent with per-word. If a hard "not editable" UI is later required for both models, it would be a separate change applied to per-word and Fixed Rate together.
 
-### 3. New `JobSubmission` display logic has no unit test
+### 3. New `JobSubmission` display logic — ✅ RESOLVED (tests added)
 
-**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderJobs/partials/JobSubmission.tsx]**
+**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderJobs/partials/JobSubmission.tsx, JobSubmission.test.tsx (new)]**
 
 **Function/Class:** JobSubmission — `hasApprovedTimeColumn` / `isFixedRateJob`
 
 **Severity:** low
 
-**Problem:** The reviewer-submit helper (`getApprovedQuantities`) is well covered (4 cases), but the `JobSubmission` change — hiding "Approved Time" for Fixed Rate and the derived Score-placement booleans — has no test. The component has no existing test harness, so the branch is unverified by automation.
+**Problem (original):** The `JobSubmission` change — hiding "Approved Time" for Fixed Rate — had no test; the component had no existing harness.
 
-**Impact:** Low — the change mirrors the existing untested `!isPerWordJob` guard, and the Score-layout booleans were refactored to a single source (`hasApprovedTimeColumn`) which reduces the risk of divergence. But a regression that re-shows "Approved Time" for Fixed Rate (or misplaces the Score) would not be caught.
-
-**Fix:** Optional — add a focused render test asserting the "Approved Time" column is absent for a Fixed Rate job and present for an hourly one, plus the Score inline/new-line placement. Requires mocking `DescriptionList`/`Accordion`; reasonable to defer given the low blast radius.
+**Resolution:** Added `JobSubmission.test.tsx` (3 cases) covering the `hasApprovedTimeColumn` gate: "Approved Time" is shown for an hourly job, hidden for a Fixed Rate job (while "Editor's Work Time" still renders from `userEnteredQuantity`), and hidden for a per-word job (guards the pre-existing behaviour). `Accordion`/`DescriptionList` are mocked to render item titles as plain text for deterministic assertions — same style as the sibling `ReviewForm` test. Typecheck, lint, and the 3 tests are green.
 
 ### 4. `getApprovedQuantities` forwards `undefined` when the quoted quantity is missing
 
@@ -102,11 +100,11 @@ The sharper, concrete sub-issue: `getApprovedQuantities` sourced `WORDS_UNIT_VAL
 
 ## Validation Checks
 
-Full suite run in place on `4da4d3a75`; after the Issue-1 one-line follow-up (`b21d66584`) typecheck, lint, and the 4 helper tests were re-run green (the change only swaps an import source to the same constant value, so build is unaffected).
+Full suite run in place on `4da4d3a75`. Follow-ups re-verified: Issue-1 import fix (`b21d66584`) — typecheck/lint/4 helper tests green; Issue-3 test addition (`84c7a1875`) — typecheck/lint/3 new `JobSubmission` tests green. Neither touches the build output.
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⚠️ PR-scope pass, monorepo ❌ | creative-portal passes incl. `getApprovedQuantities` tests (4/4); shared 1318/1319 — **1 pre-existing unrelated failure** in `packages/shared/utils/formatWordQuantity.test.ts` (locale digit-grouping `1,000,000`), present on develop, untouched here |
+| `npx turbo run test` | ⚠️ PR-scope pass, monorepo ❌ | creative-portal passes incl. `getApprovedQuantities` tests (4/4) and `JobSubmission` tests (3/3); shared 1318/1319 — **1 pre-existing unrelated failure** in `packages/shared/utils/formatWordQuantity.test.ts` (locale digit-grouping `1,000,000`), present on develop, untouched here |
 | `npx turbo run typecheck` | ✅ | 0 errors across all 5 workspaces |
 | `npx turbo run lint` | ⚠️ PR-scope pass, monorepo ❌ | The PR's files pass eslint; **5 pre-existing prettier errors** all in `components/molecules/JobReturnTimesTray/index.test.tsx`, present on develop, untouched here |
 | `npx turbo run build` | ✅ | creative-portal build clean (the helper import resolves and bundles) |
@@ -118,9 +116,9 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 ## Tests
 
 - ✅ Unit tests for `getApprovedQuantities` (`Submission/utils.test.ts`, 4 cases): Fixed Rate, per-word, hourly, and mixed charge/pay — also exercise the exact logic now used by both server routes
-- ✅ Meets the "every PR must include tests" requirement for the core fix
+- ✅ Unit tests for the `JobSubmission` "Approved Time" display (`JobSubmission.test.tsx`, 3 cases): shown for hourly, hidden for Fixed Rate (editor work time still shown), hidden for per-word
+- ✅ Meets the "every PR must include tests" requirement
 - ✅ Manual reproduction + verification: order 21174 inflated to £11,710.83; order 21175 fixed at flat £65 (Fixed Rate, Qty 1)
-- ⚠️ No test for the `JobSubmission` "Approved Time" display change (Issue 3) — component has no existing harness
 - ⚠️ No test covers the `undefined` quoted-quantity edge (Issue 4) — acceptable, matches prior behaviour
 
 ---
@@ -131,7 +129,7 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 |---|---|
 | Correctness | ✅ Fixes root cause; manually verified (flat £65) |
 | Regression risk | ✅ Low — only Fixed Rate/per-word quantity changes; hourly unchanged; all three writers now share one guard |
-| Tests | ⚠️ Core helper well tested; `JobSubmission` display change untested |
+| Tests | ✅ Helper (4 cases) and `JobSubmission` display (3 cases) unit-tested |
 | Code quality | ✅ Clean single-source guard; Issue-1 import-weight caveat resolved (helper sources the shared constant) |
 | Validation suite | ⚠️ PR files pass; 2 pre-existing unrelated monorepo failures (locale test + prettier, untouched files) |
 | Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`, no conflicts) |
@@ -146,4 +144,4 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 2. **Confirm the two failing gate checks are the known pre-existing develop failures** (`formatWordQuantity` locale test, `JobReturnTimesTray` prettier) and not a merge blocker — they exist independently in untouched files.
 3. **Issue 1 addressed** — `getApprovedQuantities` now sources `WORDS_UNIT_VALUE` from `@proofed/shared/config/units`, so the server routes no longer transitively import a React-heavy page consts. Helper location left as-is (idiomatic).
 4. **Issue 2 skipped by design** — the "not editable" clause is intentionally omitted so Fixed Rate matches the per-word rate order (editable/informational field, quantity fixed at billing). Worth noting on the ticket so QA doesn't flag it.
-5. **Optional follow-up:** add a `JobSubmission` display test (Issue 3).
+5. **Issue 3 resolved** — `JobSubmission.test.tsx` now covers the "Approved Time" display gate (hidden for Fixed Rate/per-word, shown for hourly). No outstanding follow-ups.
