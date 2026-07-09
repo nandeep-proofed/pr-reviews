@@ -15,9 +15,9 @@
 | Compensation = fixed pay × 1 | Same guard applied to `approvedPayQuantity` | ✅ Addressed |
 | Fixed price jobs should follow the **Per Word model for Approved Quantities** | The reviewer-submit path and both server routes now share one guard that treats Fixed Rate exactly like per-word (quoted quantity retained) | ✅ Addressed |
 | Fixed price jobs should follow the Per Word model for **display rules** | `JobSubmission` "Approved Time" column is now hidden for Fixed Rate jobs (via `hasApprovedTimeColumn`), matching per-word | ✅ Addressed |
-| Approved-quantity field **should not be editable** and should default to 1 | Billing is corrected, but the editor Work Time input **remains editable** for Fixed Rate jobs — the disable-the-input change was implemented and then reverted per the client's decision | ⚠️ Deferred by client (see Issue 2) |
+| Approved-quantity field **should not be editable** and should default to 1 | **Skipped** — Fixed Rate now follows the same behaviour as a per-word rate order, where the Work Time field stays editable/informational and the quantity is fixed at billing time. Billing is corrected (quantity = 1); the "not editable" UI is not applied | ⏭️ Skipped (matches per-word model) — see Issue 2 |
 
-**Scope note:** The PR is scoped to (a) the reviewer-submit billing fix, (b) de-duplicating the guard into one helper shared by both server routes, and (c) hiding the "Approved Time" display for Fixed Rate jobs. The ticket's literal "not editable" clause is intentionally out of scope per the client. No unrelated refactors.
+**Scope note:** The PR is scoped to (a) the reviewer-submit billing fix, (b) de-duplicating the guard into one helper shared by both server routes, and (c) hiding the "Approved Time" display for Fixed Rate jobs. The ticket's literal "not editable" clause is intentionally skipped so Fixed Rate matches the existing per-word rate order behaviour. No unrelated refactors.
 
 ---
 
@@ -38,21 +38,23 @@ Root-cause fix at the source (correct quantity sent to the API), not a symptom p
 
 ## Issues Found
 
-### 1. Guard helper is imported by the API layer from a UI-component path
+### 1. Guard helper is imported by the API layer from a UI-component path — ✅ concrete part RESOLVED
 
-**[File: apps/creative-portal/api/utils/jobs/postSubmitJob.ts, postSubmitJobStream.ts]**
+**[File: apps/creative-portal/api/utils/jobs/postSubmitJob.ts, postSubmitJobStream.ts, .../Submission/utils.ts]**
 
 **Function/Class:** getApprovedQuantities
 
 **Severity:** low
 
-**Problem:** Both server routes import `getApprovedQuantities` from `components/organisms/sidebars/contents/JobManagement/partials/Submission/utils` — the API layer reaching into a deep React-component folder. The dependency direction is backwards (server → UI component), and the helper's home implies it is job-sidebar UI code.
+**Problem:** Both server routes import `getApprovedQuantities` from `components/organisms/sidebars/contents/JobManagement/partials/Submission/utils` — the API layer reaching into a React-component folder.
 
-**Impact:** Maintainability only — it compiles, type-checks, and bundles cleanly (build is green). But the location is misleading and couples the API routes to a component folder; a future move/rename of the Submission component would ripple into server code.
+**Validation finding:** The broad "backwards dependency direction" is a **weak** complaint here — `api/ → components/` is an established, lint-clean pattern in this repo (6 pre-existing precedents, e.g. `getJobTaskPayload`), and there is no import-boundary lint rule enforcing a server/UI split. Relocating the whole helper would diverge from that convention, so it was **not** done.
 
-**Fix:** Relocate the helper to a neutral module — `packages/shared/utils` (parameterised over the primitive fields), or a local `apps/creative-portal/api/utils/jobs/` helper — and have all three call sites import from there. Non-blocking; can be a follow-up.
+The sharper, concrete sub-issue: `getApprovedQuantities` sourced `WORDS_UNIT_VALUE` from the settings page consts (`.../settings/consts.tsx`), which imports `theme-ui` + 7 React page components. That made the two server routes transitively reach into a UI-heavy module — a **regression vs pre-PR**, where the routes imported the value from the React-free `@proofed/shared/config/units`.
 
-### 2. Ticket's "approved-quantity field should not be editable" clause is not implemented
+**Resolution:** `Submission/utils.ts` now imports `WORDS_UNIT_VALUE` from `@proofed/shared/config/units` (same value `1000`, React-free). This severs the server routes' transitive path into the page-UI module and restores their pre-PR import weight. Typecheck, lint, and the 4 helper tests remain green. The helper's physical location is left as-is (idiomatic for this repo).
+
+### 2. Ticket's "approved-quantity field should not be editable" clause — ⏭️ SKIPPED (matches per-word model)
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/JobManagement/partials/ServiceSubmission/index.tsx (and order-side EditingForm)]**
 
@@ -60,11 +62,13 @@ Root-cause fix at the source (correct quantity sent to the API), not a symptom p
 
 **Severity:** low
 
-**Problem:** The Jira Expected Result states the approved-quantity field "should not be editable and should default to 1" for fixed-price orders. This PR corrects billing (the value is ignored) but still renders the Work Time input as editable for Fixed Rate jobs. A disable-the-input change was implemented on both panels and then reverted per the client's decision.
+**Problem:** The Jira Expected Result states the approved-quantity field "should not be editable and should default to 1" for fixed-price orders. This PR corrects billing (the value is ignored) but still renders the Work Time input as editable for Fixed Rate jobs.
 
-**Impact:** Purely UX — a reviewer/editor can type a work time that has no billing effect. No revenue impact (the Issue-1 guard already sends the quoted quantity).
+**Status — Skipped (intentional):** A disable-the-input change was implemented on both panels and then reverted. The field is **intentionally left editable to match the existing per-word rate order behaviour** — on a per-word order the Work Time input is also editable/informational and the quantity is fixed at billing time. The ticket asks Fixed Rate to "follow the per-word model", so mirroring per-word's editable-but-informational field is the chosen interpretation. The quantity is already defaulted to 1 at billing via the Issue-1 guard.
 
-**Fix:** None planned (client-deferred). If the "not editable" UX is later requested, re-apply the disable on the Work Time input plus the `serviceWorkTime > 0` validation relaxation for the job-side (the order-side validation already skips the rule for fixed-quantity jobs).
+**Impact:** None on revenue (value is ignored for billing). A reviewer/editor can type a work time that has no billing effect, exactly as on a per-word order.
+
+**Fix:** None planned — skipped by design to keep Fixed Rate consistent with per-word. If a hard "not editable" UI is later required for both models, it would be a separate change applied to per-word and Fixed Rate together.
 
 ### 3. New `JobSubmission` display logic has no unit test
 
@@ -98,14 +102,14 @@ Root-cause fix at the source (correct quantity sent to the API), not a symptom p
 
 ## Validation Checks
 
-Run in place on the PR branch `fix/PP-1981-fixed-rate-review-submit-quantity` (HEAD `4da4d3a75`), clean working tree.
+Full suite run in place on `4da4d3a75`; after the Issue-1 one-line follow-up (`b21d66584`) typecheck, lint, and the 4 helper tests were re-run green (the change only swaps an import source to the same constant value, so build is unaffected).
 
 | Check | Result | Notes |
 |---|---|---|
 | `npx turbo run test` | ⚠️ PR-scope pass, monorepo ❌ | creative-portal passes incl. `getApprovedQuantities` tests (4/4); shared 1318/1319 — **1 pre-existing unrelated failure** in `packages/shared/utils/formatWordQuantity.test.ts` (locale digit-grouping `1,000,000`), present on develop, untouched here |
 | `npx turbo run typecheck` | ✅ | 0 errors across all 5 workspaces |
-| `npx turbo run lint` | ⚠️ PR-scope pass, monorepo ❌ | The PR's 6 files pass eslint; **5 pre-existing prettier errors** all in `components/molecules/JobReturnTimesTray/index.test.tsx`, present on develop, untouched here |
-| `npx turbo run build` | ✅ | creative-portal build clean (the cross-layer helper import resolves and bundles) |
+| `npx turbo run lint` | ⚠️ PR-scope pass, monorepo ❌ | The PR's files pass eslint; **5 pre-existing prettier errors** all in `components/molecules/JobReturnTimesTray/index.test.tsx`, present on develop, untouched here |
+| `npx turbo run build` | ✅ | creative-portal build clean (the helper import resolves and bundles) |
 
 Both failing checks fail on **develop** in files this PR does not touch. Per PR scope discipline they were left unfixed; they are pre-existing locale/formatting issues, not introduced by this PR.
 
@@ -128,7 +132,7 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 | Correctness | ✅ Fixes root cause; manually verified (flat £65) |
 | Regression risk | ✅ Low — only Fixed Rate/per-word quantity changes; hourly unchanged; all three writers now share one guard |
 | Tests | ⚠️ Core helper well tested; `JobSubmission` display change untested |
-| Code quality | ✅ Clean single-source guard; low import-direction caveat (Issue 1) |
+| Code quality | ✅ Clean single-source guard; Issue-1 import-weight caveat resolved (helper sources the shared constant) |
 | Validation suite | ⚠️ PR files pass; 2 pre-existing unrelated monorepo failures (locale test + prettier, untouched files) |
 | Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`, no conflicts) |
 
@@ -140,5 +144,6 @@ Both failing checks fail on **develop** in files this PR does not touch. Per PR 
 
 1. **Merge-ready for the revenue bug** — the fix is correct, root-caused, tested, and manually verified (charge stays flat for Fixed Rate). Guard is now single-sourced across all three writers, and the "Approved Time" display matches per-word.
 2. **Confirm the two failing gate checks are the known pre-existing develop failures** (`formatWordQuantity` locale test, `JobReturnTimesTray` prettier) and not a merge blocker — they exist independently in untouched files.
-3. **Note the deferred Jira clause (Issue 2)** — the ticket's literal "field should not be editable / default to 1" is not implemented (client decision). Consider recording this on the ticket so QA doesn't flag it as a regression, or track it as a follow-up.
-4. **Optional follow-ups:** relocate `getApprovedQuantities` out of the UI-component folder (Issue 1); add a `JobSubmission` display test (Issue 3).
+3. **Issue 1 addressed** — `getApprovedQuantities` now sources `WORDS_UNIT_VALUE` from `@proofed/shared/config/units`, so the server routes no longer transitively import a React-heavy page consts. Helper location left as-is (idiomatic).
+4. **Issue 2 skipped by design** — the "not editable" clause is intentionally omitted so Fixed Rate matches the per-word rate order (editable/informational field, quantity fixed at billing). Worth noting on the ticket so QA doesn't flag it.
+5. **Optional follow-up:** add a `JobSubmission` display test (Issue 3).
