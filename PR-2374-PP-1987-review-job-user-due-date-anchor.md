@@ -39,13 +39,15 @@ This resolves the earlier review points: no custom `useOrderJobsMap` hook (remov
 
 **Function/Class:** applyAnchoredDueDate (via getProjectionAnchorUtc → getPreviousParticipatingJob)
 
-**Severity:** low (team-accepted)
+**Severity:** low
 
-**Problem:** `getPreviousParticipatingJob` walks the array by index, so the anchor is only correct if `orderJobs` is in workflow sequence. The per-order search (`searchBy=orderId`) is relied on to return that order. A `maxReturnTime` sort was added and then intentionally removed after the team confirmed the search returns jobs in sequence.
+**Status:** ✅ ACCEPTED — won't fix. The team has accepted this as a known assumption (relies on the OMS `orderId`-search returning `jobSequence` order). No code change.
 
-**Impact:** Correct as long as the OMS `orderId` search keeps returning workflow-sequence order (empirically true). If that ever changes, the anchor would pick the wrong previous job.
+**Problem:** `getPreviousParticipatingJob` walks the array by index, so the anchor is only correct if `orderJobs` is in workflow sequence. The per-order search (`searchBy=orderId`) is relied on to return that order — and `getAssignedJobs` applies no client/BFF-side sort, so the order is purely whatever OMS returns. A `maxReturnTime` sort was added and then intentionally removed on the basis that the search returns jobs in sequence.
 
-**Fix:** None requested — documented as an accepted assumption. If defensiveness is ever wanted, sort `orderJobs` by `maxReturnTime` (strictly increasing along the sequence) before anchoring.
+**Impact:** Correct for the current 2-job Editing→Review orders (created in order, so id-order == sequence-order). Latent risk only if OMS ever returns the `orderId` search in a non-sequence order — most plausibly for post-live-inserted / 3+ step orders (PP-1863), where a downstream job could anchor on the wrong previous job.
+
+**Decision:** Accepted for this hotfix. The assumption is documented in the `applyAnchoredDueDate` code comment. If it ever needs hardening, sort `orderJobs` by `maxReturnTime` (strictly increasing along the sequence, preserved through insertion) before anchoring — deterministic and independent of OMS order. Optional de-risk: confirm the OMS `orderId`-search ordering contract with the backend.
 
 ### 2. "Downstream" is approximated by `jobType === REVIEW`
 
@@ -94,7 +96,7 @@ Validation suite was **not run for this review** (user opted out). Re-run `npx t
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Fixes the downstream (Review) due date; sound for current data |
+| Correctness | ✅ Fixes the downstream (Review) due date; sound for current data (Issue 1 accepted) |
 | Regression risk | ✅ Low (mapper/`useOfferedJobs`/`expand`/sorting untouched; generalized hook has no other callers) |
 | Tests | ✅ Helper unit tests; ⚠️ no e2e |
 | Code quality | ✅ Idiomatic (`useJobSearchQueries` + derive-in-component); prior review points addressed |
@@ -109,6 +111,6 @@ Validation suite was **not run for this review** (user opted out). Re-run `npx t
 
 1. Re-run the full validation suite (`test`/`typecheck`/`lint`/`build`) before merge — not run for this review.
 2. Complete the manual/visual check on order 21186 (Review row shows the anchored date) and tick the PR's manual-testing box.
-3. (Optional, documented) Keep the workflow-sequence assumption (Issue 1) and the `jobType === REVIEW` proxy (Issue 2) in mind if OMS ordering or the dashboard's visible job types change.
+3. Issue 1 (workflow-sequence assumption) is **accepted — won't fix** for this hotfix; keep it (and the `jobType === REVIEW` proxy, Issue 2) in mind if OMS ordering or the dashboard's visible job types change.
 
-No blockers in the static review. Both open items are low-severity, team-accepted trade-offs already captured in code comments.
+No blockers in the static review. Both items are low-severity, team-accepted trade-offs already captured in code comments; Issue 1 is explicitly accepted / won't fix.
