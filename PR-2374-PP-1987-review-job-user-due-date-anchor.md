@@ -57,11 +57,11 @@ This resolves the earlier review points: no custom `useOrderJobsMap` hook (remov
 
 **Severity:** low
 
-**Problem:** The re-anchor (and the sibling fetch) are scoped to `jobType === JobType.REVIEW`. On this dashboard that's exactly the set of downstream jobs (Editing is always first; RETURN/QA are filtered out), and scoping avoids a wasted fetch for Editing-only orders. But job type is a proxy for "not the first participating job" — if a workflow ever shows a non-Review downstream job on this dashboard, it wouldn't be re-anchored.
+**Problem:** The re-anchor (and the sibling fetch) are scoped to `jobType === JobType.REVIEW`, a proxy for "not the first participating job". The dashboard filters out RETURN/QA but **not** SERVICE, REVIEW, or **AI** (AI routes to the EDITING queue). So if a non-Review downstream job — most plausibly an **AI** "post-edit" step — is ever offered/available to a creative here, it would not be re-anchored and would show the now-based value (the same PP-1987 bug, uncaught).
 
-**Impact:** None for current workflows. A future workflow change with a different downstream job type shown here would silently miss the correction.
+**Impact:** None for the current Editing→Review workflow. Would bite if a non-Review downstream job (e.g. AI) surfaces offered/available on this dashboard.
 
-**Fix:** Acceptable as-is (documented in the code comment). Revisit if the dashboard ever surfaces a non-Review downstream job.
+**Fix:** Open — confirm with the team whether an AI (or any non-Review) job can be offered/available to a creative on this dashboard. If no, accept as documented. If yes, gate on position ("not the first participating job") instead of job type, or drop the `REVIEW` gate (accepting the extra Editing-only-order fetch).
 
 ### Observation (not an issue)
 
@@ -73,12 +73,13 @@ This resolves the earlier review points: no custom `useOrderJobsMap` hook (remov
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⏭️ Skipped — user opted out | Jobs dir green on this HEAD: `utils.test.ts` + `hooks.test.ts` = **37/37**. Full suite was **1686/1686** on the equivalent logic earlier. |
-| `npx turbo run typecheck` | ⏭️ Skipped — user opted out | creative-portal `typecheck` **0 errors** on this HEAD. |
-| `npx turbo run lint` | ⏭️ Skipped — user opted out | ESLint clean on changed files on this HEAD; full-repo lint not run. |
-| `npx turbo run build` | ⏭️ Skipped — user opted out | Not run this session. |
+| `test` (ticket + creative-portal) | ✅ Pass | PP-1987 ticket tests **92/92** (`utils`, `hooks`, `jobItemToJobTableItem`, `dynamicReturnTimes`, `postAcceptJob`); `@proofed/creative-portal` green. |
+| `npx turbo run test` (whole repo) | ⚠️ 1 pre-existing unrelated failure | `@proofed/shared` → `utils/formatWordQuantity.test.ts` (`10,00,000` vs `1,000,000`) — an `Intl` **locale artifact** of the test machine, not touched by this PR and pre-existing on `develop`. |
+| `npx turbo run typecheck` | ✅ Pass | **0 errors** across all 5 workspaces. |
+| `npx eslint` (changed files) | ✅ Pass | Clean on all files this PR changes. (Full-repo lint has an unrelated pre-existing prettier error in `JobReturnTimesTray/index.test.tsx`.) |
+| `npx turbo run build` | ⏭️ Not run | Not exercised this session. |
 
-Validation suite was **not run for this review** (user opted out). Re-run `npx turbo run test typecheck lint build` before merging; a full-repo `build` has not been exercised on this branch.
+Everything **this PR changes** is clear: ticket tests 92/92, creative-portal green, typecheck 0 errors, changed-file lint clean. The only whole-repo red is the pre-existing `@proofed/shared` locale test (unrelated). Re-run a full `build` before merging.
 
 ---
 
@@ -87,8 +88,9 @@ Validation suite was **not run for this review** (user opted out). Re-run `npx t
 - ✅ `applyAnchoredDueDate` re-anchor test (Editing→Review, real OMS values: `18:04:51 + 2h = 20:04:51`).
 - ✅ `applyAnchoredDueDate` siblings-absent no-op test.
 - ✅ `hooks.test.ts` mock updated (`useJobSearchQueries: () => []`).
+- ✅ Ran: PP-1987 ticket tests **92/92**; typecheck **0 errors** (all workspaces); changed-file lint **clean**.
+- ⚠️ Whole-repo `test` has one pre-existing, unrelated failure in `@proofed/shared` (locale artifact); full `build` not run this session.
 - ⚠️ No automated coverage of the end-to-end fetch → anchor → render path (relies on manual/QA).
-- ⏭️ Validation suite skipped this session.
 
 ---
 
@@ -96,12 +98,12 @@ Validation suite was **not run for this review** (user opted out). Re-run `npx t
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Fixes the downstream (Review) due date; sound for current data (Issue 1 accepted) |
+| Correctness | ✅ Fixes the downstream (Review) due date; sound for current data |
 | Regression risk | ✅ Low (mapper/`useOfferedJobs`/`expand`/sorting untouched; generalized hook has no other callers) |
 | Tests | ✅ Helper unit tests; ⚠️ no e2e |
 | Code quality | ✅ Idiomatic (`useJobSearchQueries` + derive-in-component); prior review points addressed |
-| Validation suite | ⏭️ Skipped — user opted out (scoped checks green on this HEAD) |
-| Mergeable state | ⏭️ Not verified this session |
+| Validation suite | ✅ test (ticket 92/92) + typecheck (0 errors) + changed-file lint clean; ⚠️ 1 pre-existing unrelated `@proofed/shared` locale test fails; build not run |
+| Mergeable state | ⏭️ Not re-verified this session |
 
 ---
 
@@ -109,8 +111,8 @@ Validation suite was **not run for this review** (user opted out). Re-run `npx t
 
 **Approve with suggestions**
 
-1. Re-run the full validation suite (`test`/`typecheck`/`lint`/`build`) before merge — not run for this review.
+1. `test` (ticket 92/92), `typecheck` (0 errors), and changed-file `lint` are green; run a full `build` before merge (not exercised this session). Note the pre-existing `@proofed/shared` locale test failure is unrelated.
 2. Complete the manual/visual check on order 21186 (Review row shows the anchored date) and tick the PR's manual-testing box.
-3. Issue 1 (workflow-sequence assumption) is **accepted — won't fix** for this hotfix; keep it (and the `jobType === REVIEW` proxy, Issue 2) in mind if OMS ordering or the dashboard's visible job types change.
+3. Issue 1 (workflow-sequence assumption) is **accepted — won't fix** for this hotfix. Issue 2 (`jobType === REVIEW` scoping) is **open** — confirm whether a non-Review downstream job (e.g. AI) can appear offered/available here before accepting it.
 
-No blockers in the static review. Both items are low-severity, team-accepted trade-offs already captured in code comments; Issue 1 is explicitly accepted / won't fix.
+No blockers in the static review. Issue 1 is explicitly accepted / won't fix; Issue 2 needs a quick product confirmation but has no impact on the current Editing→Review workflow.
