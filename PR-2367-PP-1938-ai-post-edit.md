@@ -49,21 +49,21 @@ The approach reuses the existing "AI collapses to `JobType.AI` for styling/statu
 
 **Resolution (commit `f3cb3ff4`):** Added `migrateLegacyJobFilter` — maps legacy `JobType.AI` → `AiJobFilterValue.PRE_EDIT` and dedupes — and applied it wherever a saved filter is restored: the **localStorage load** (`hooks.ts`) and the **Order Management View select** (`useOrderManagementView`), including the **dirty-state baseline** so a selected legacy view isn't immediately flagged modified against its own migrated value. Mapping to Pre-edit is faithful, not lossy: pre-PP-1938 the sole AI option was value `"AI"` **labelled "AI Pre-edit"** (Post-edit didn't exist), so a saved `"AI"` was an AI Pre-edit filter. Unit-tested (5 cases: legacy → Pre-edit, granular values untouched, order preserved, dedupe, empty). typecheck / lint green.
 
-### 2. Column label reflects raw backend prefix casing
+### 2. Column label reflects raw backend prefix casing — ✅ No action needed
 
 **[File: components/molecules/tables/TableWithFilters/utils.ts]**
 
 **Function/Class:** getFormattedCurrentJobForOrderTable
 
-**Severity:** low
+**Severity:** low (informational)
 
 **Problem:** For AI jobs the label now returns `liveStatus.split(":")[0].trim()` verbatim. If the OMS emits a different casing than expected (e.g. `"AI Post-Edit"`), the column shows that casing.
 
 **Impact:** Display fidelity depends on the exact OMS task-name string. The live endpoint confirms the OMS uses `"AI Post-edit"` (matching the code), so this is correct today; noted only as a backend-coupling. Previously every AI job was hard-coded to `"AI Pre-edit"`, so this is strictly more correct.
 
-**Fix:** None needed — verified against the live OMS endpoint (Q1 resolved).
+**Fix:** None needed — verified against the live OMS `JobTaskTypes` endpoint (Q1). No change required; kept only as a backend-coupling note.
 
-### 3. Post-edit config template inherits Pre-edit's allowSkip inconsistency
+### 3. Post-edit config template faithfully mirrors Pre-edit (`allowSkip`) — ✅ No action needed (informational)
 
 **[File: components/pages/partners/[partnerId]/projects/[projectId]/settings/consts.tsx]**
 
@@ -71,11 +71,11 @@ The approach reuses the existing "AI collapses to `JobType.AI` for styling/statu
 
 **Severity:** low (informational)
 
-**Problem:** The Post-edit template mirrors Pre-edit exactly, including `allowDeletion: false, requireCreation: true`. The builder, however, pushes AI jobs with `allowSkip: true, skipByDefault: false`. So there's a mismatch between the stored config template (→ `allowSkip: false` on load) and the builder-added value — but this is a **pre-existing** discrepancy inherited from Pre-edit, not new.
+**Observation:** The Post-edit job-task config template is an exact mirror of Pre-edit (both spread `DEFAULT_SERVICE_CONFIG_FIELDS`, `allowDeletion: false`, `requireCreation: true`) and, like Pre-edit, sets no `allowSkip`. The workflow builder separately pushes AI jobs (both Pre **and** Post) with `allowSkip: true, skipByDefault: false`.
 
-**Impact:** None observed; Post-edit behaves identically to Pre-edit (the ticket's intent). Flagged so a reviewer knows it was a deliberate mirror, not an oversight.
+**Clarification (verified):** This is **not a real config-vs-builder conflict** — the two are separate subsystems. `allowSkip`/`skipByDefault` are **workflow-builder** fields (can a job be skipped when creating orders); the **settings job-task config template** governs charge/pay + `allowDeletion`/`requireCreation` and carries **no `allowSkip` field at all**, so there is no single object where a template value contradicts the builder value — they're orthogonal. Post-edit mirroring Pre-edit is the **intended** behaviour (Req 1.4, same treatment), and the nuance is **pre-existing** (identical for Pre-edit), so it's out of scope for this PR.
 
-**Fix:** None unless the team wants to reconcile it for both Pre and Post together (out of scope here).
+**Fix:** None — informational only; nothing to reconcile here. (If the team ever wants to revisit AI-job `allowSkip` semantics, do it for Pre and Post together in a dedicated change.)
 
 ---
 
@@ -123,11 +123,11 @@ _All creative-portal tests (where 100% of this PR's changes live) pass. The sing
 
 ## Recommendation
 
-**Approve with suggestions** — the implementation is correct, well-scoped, and tested. Of the three issues found (all low severity), #1 is now fixed. Before merge:
+**Approve with suggestions** — the implementation is correct, well-scoped, and tested. Of the three issues found (all low severity): **#1 is fixed** (commit `f3cb3ff4`), and **#2 and #3 are informational — no action needed** (both verified; #2 correct against the live OMS, #3 a faithful pre-existing mirror of Pre-edit). Before merge:
 
 1. **Confirm CI build is green.** Local `turbo build` fails environmentally (proven pre-existing on clean `develop` — compile succeeds, page-data collection throws a non-deterministic `MODULE_NOT_FOUND` on unrelated pages). Rely on CI's clean environment as the authoritative build gate.
 2. ~~**Verify the OMS task-type string** (Q1 / Req 1.3).~~ ✅ **RESOLVED** — confirmed against the live OMS `JobTaskTypes` endpoint (staging): `{ id: 36, name: "AI Post-edit", jobTypeId: 16, jobTypeName: "AI" }`, an exact case-sensitive match to the code. No change needed.
 3. ~~**Issue #1** (legacy bare-AI saved filter shows no ticked option).~~ ✅ **RESOLVED** in commit `f3cb3ff4` — `migrateLegacyJobFilter` maps `"AI"` → `"AI Pre-edit"` at both the localStorage and OMV load paths (+ dirty baseline), unit-tested.
 4. *(Optional)* Product decision on whether Post-edit should be pinned to the final step vs. offered at every after-service gap.
 
-_Update: Q1 / Req 1.3 verified resolved against the live OMS endpoint, and Issue #1 fixed in `f3cb3ff4`, after the initial review — the only remaining pre-merge gate is the (environmental) CI build._
+_Update: Q1 / Req 1.3 verified resolved against the live OMS endpoint, and Issue #1 fixed in `f3cb3ff4`, after the initial review. Issues #2 and #3 confirmed informational (no action needed). The only remaining pre-merge gate is the (environmental) CI build._
