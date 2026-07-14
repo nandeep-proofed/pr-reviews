@@ -2,7 +2,19 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2371
 **Jira:** https://proofed.atlassian.net/browse/PP-1981
-**Status:** Code Review
+**Status:** Code Review — **all 3 issues triaged, verification pass complete**
+
+---
+
+## Review Outcomes
+
+| # | Issue | Severity | Status | Resolution |
+|---|---|---|---|---|
+| 1 | API server utils import a helper from a nested UI component folder | low → **won't fix** | ❌ **Rejected** | `api/` → `components/` is the established house pattern (8 files, 3 with the identical shape). The closest precedent imports from a **`.tsx` containing JSX**; this PR's helper is a pure `.ts`. Fixing it here alone would make this PR the only non-conforming call site. Codebase-wide cleanup ticket instead. |
+| 2 | Two sources of truth for the unit constants (util vs. test) | low | ✅ **Fixed** | `utils.test.ts` now imports all three constants from `@proofed/shared/config/units` (the source the util uses, and the dominant convention at 44 files vs 15). Values identical — no behaviour change. |
+| 3 | No regression test at the actual bug-path (`handleReviewJobSubmission`) | low | ⏭️ **Skipped** | Gap is real, but the only *new* code in the hook is a one-line spread whose logic has 4 passing tests. The division above it is unchanged context. Reaching the internal fn costs ~7 mocks. Deferred. |
+
+**Additional review point addressed (from PR comments, not in this report):** rename `getApprovedQuantities`' param `task` → `jobTask`. ✅ Applied — also updated the hook's map callback, aligning all three call sites with the `JobTask` type (the two API routes already used `jobTask`).
 
 ---
 
@@ -12,12 +24,14 @@
 |---|---|---|
 | Fixed-price job's approved **charge** quantity must default to the quoted quantity (≈1), not the entered minutes — `Total Charge = fixed price × 1` | `getApprovedQuantities` returns `quotedChargeQuantity` when `useFixedChargeQuantity` (or per-word) — entered minutes no longer applied as charge qty | ✅ Addressed |
 | Fixed-price job's approved **pay** quantity must default to the quoted quantity — `compensation = fixed pay × 1` | Same helper returns `quotedPayQuantity` when `useFixedPayQuantity` (or per-word) | ✅ Addressed |
-| Fix the frontend reviewer/approval path (`Submission/hooks.ts`) that special-cased per-word only, so fixed-price hourly fell through | `handleReviewJobSubmission` now calls `getApprovedQuantities(task, approvedWorkTime)` instead of the per-word-only inline logic — this is the actual production bug path | ✅ Addressed (root cause) |
+| Fix the frontend reviewer/approval path (`Submission/hooks.ts`) that special-cased per-word only, so fixed-price hourly fell through | `handleReviewJobSubmission` now calls `getApprovedQuantities(jobTask, approvedWorkTime)` instead of the per-word-only inline logic — this is the actual production bug path | ✅ Addressed (root cause) |
 | Fix the API submission util (`api/utils/jobs/postSubmitJob.ts`) named in the investigation | Both `postSubmitJob.ts` **and** `postSubmitJobStream.ts` refactored to reuse the shared helper (they already had a correct inline guard; now de-duplicated) | ✅ Addressed |
 | "Approved-quantity field should not be editable" for fixed-price (match per-word behaviour) | The editable approved-work-time input in `ServiceSubmission` was **already** hidden for fixed-price (`isJobPriceFixed`, pre-PR). PR additionally hides the read-only "Approved Time:" summary column for fixed-rate in `JobSubmission.tsx` | ✅ Addressed (display parity) |
 | Price preview (`calculateJobTaskPrice.ts`) "reproduces the same formula" | Verified: the preview already guards with `useFixedQuantity ? quotedQuantity : approvedQuantity || …` — it is **not** buggy for fixed-rate, so no change was required | ✅ N/A (already correct) |
 
-**Scope note:** The `JobSubmission.tsx` display change (hiding the "Approved Time:" column + rerouting `shouldShowScore`/`shouldShowScoreInline` through a new `hasApprovedTimeColumn` flag) and the consolidation of the two API routes onto the shared helper go slightly beyond the literal ticket, but both are tightly coupled to the same bug (a fixed-rate job would otherwise show a nonsensical "Approved Time: 1 min") and are reasonable. No unrelated scope creep.
+**Scope note:** The `JobSubmission.tsx` display change and the consolidation of the two API routes onto the shared helper go slightly beyond the literal ticket, but both are tightly coupled to the same bug (a fixed-rate job would otherwise show a nonsensical "Approved Time: 1 min") and are reasonable. No unrelated scope creep.
+
+**Note on the PR description:** "Areas of Change" lists only 3 files, but the PR touches **7** (`JobSubmission.tsx`, `JobSubmission.test.tsx`, `postSubmitJob.ts`, `postSubmitJobStream.ts` are unlisted). Worth updating so the record matches the diff.
 
 ---
 
@@ -27,6 +41,8 @@ The fix correctly identifies and repairs the **root cause**: the frontend review
 
 The helper's logic is sound and matches the source-of-truth guard: keep the quoted quantity for per-word (`chargeUnit/payUnit === WORDS_UNIT_VALUE`) or fixed-quantity (`useFixedChargeQuantity/useFixedPayQuantity`) tasks; apply the entered work time only for genuinely hourly tasks. Charge and pay are resolved independently, so mixed tasks (fixed charge + hourly pay) are handled correctly.
 
+**Parity verified between the two paths.** The API divides by `totalJobTask = jobTasks.length` and maps over the same `jobTasks`; the hook divides by `serviceJobTasks.length` and maps over the same `serviceJob.jobTasks`. Both divide by the length of the array they then iterate — the consolidation introduced no mismatch.
+
 The display change in `JobSubmission.tsx` is a clean refactor: the previously-duplicated `isServiceJobOrReviewJobType && !!totalApprovedWorkTime && !isPerWordJob` expression is lifted into a single `hasApprovedTimeColumn` flag (now also excluding `isFixedRateJob`), and `shouldShowScore`/`shouldShowScoreInline` reuse it — reducing three copies of the condition to one.
 
 I traced the two other surfaces the Jira investigation named and confirmed neither needs a change: the editable work-time input is already hidden for fixed-price jobs (`ServiceSubmission/index.tsx` line 128, `isJobPriceFixed`), and `calculateJobTaskPrice.ts` already branches on `useFixedQuantity`. Both `WORDS_UNIT_VALUE` sources resolve to the same value (`1000`), so the frontend's import-source change is behaviour-preserving.
@@ -35,58 +51,63 @@ I traced the two other surfaces the Jira investigation named and confirmed neith
 
 ## Issues Found
 
-### 1. API server utils import a helper from a deeply-nested UI component folder
+### 1. API server utils import a helper from a deeply-nested UI component folder — ❌ REJECTED (follows house convention)
 
 **[File: apps/creative-portal/api/utils/jobs/postSubmitJob.ts]** (and `postSubmitJobStream.ts`)
 
-**Function/Class:** postSubmitJob / postSubmitJobStream
+**Severity:** ~~low~~ → **won't fix for this PR**
 
-**Severity:** low
+**What's true:** both API-route utilities now import `getApprovedQuantities` from `components/organisms/sidebars/contents/JobManagement/partials/Submission/utils`.
 
-**Problem:** Both API-route utilities now import `getApprovedQuantities` from `components/organisms/sidebars/contents/JobManagement/partials/Submission/utils`. This inverts the usual dependency direction (server/API code depending on a React component partial) and hard-couples the API routes to the exact folder path of a UI partial.
+**Why this is being rejected — `api/` → `components/` is the established pattern here, not an inversion:**
 
-**Impact:** No runtime/bundle risk today — `utils.ts` is a pure module importing only `WORDS_UNIT_VALUE` and the `JobTask` type (no React/client-only code), and ES imports pull only that file, not the sibling `index.tsx`/`hooks.ts`. But it's a fragile, backwards coupling: renaming or relocating the `Submission/` component folder (a routine UI refactor) would silently break two server routes, and it reads oddly for anyone tracing API dependencies.
-
-**Fix:** Move the shared helper to a neutral, dependency-appropriate location that both the API and the component can import — e.g. `apps/creative-portal/api/utils/jobs/getApprovedQuantities.ts` (co-located with the routes that own the billing rule) or `@proofed/shared`. Have `Submission/hooks.ts` import from there rather than the API importing "up" into components:
-
-```typescript
-// api/utils/jobs/getApprovedQuantities.ts  (new home)
-export const getApprovedQuantities = (
-  task: JobTask,
-  approvedWorkTime: number
-): ApprovedQuantities => { /* … unchanged … */ };
-
-// Submission/hooks.ts
-import { getApprovedQuantities } from "api/utils/jobs/getApprovedQuantities";
+```
+api/orders/createNew/utils.ts:46                      → components/organisms/NewOrderForm/partials/WorkflowStep/utils
+api/mixtures/jobs/addJobWithTasks/addJobWithTasks.ts  → components/organisms/NewOrderForm/partials/WorkflowStep/utils
+api/mixtures/jobs/addNewJobs/addNewJobs.ts            → components/organisms/NewOrderForm/partials/WorkflowStep/utils
+api/mixtures/configurations/workflow-setup/…          → components/pages/partners/[partnerId]/…/JobTemplates/utils/…
+api/jobs/types.ts:4                                   → components/atoms/JobStatus/types
+api/service-configuration/types.ts:2                  → components/pages/partners/[partnerId]/…/settings/types
 ```
 
-### 2. Two sources of truth for the unit constants (util vs. test import different modules)
+8 files total; three are the *identical shape* (an API util importing a pure helper from a deeply-nested component partial's `utils`). No ESLint boundary rule (`no-restricted-paths` / `no-restricted-imports`) exists anywhere in the config.
+
+**The closest precedent is materially worse than this PR.** `api/orders/createNew/utils.ts` imports `getJobTaskPayload` from `WorkflowStep/utils.tsx` — a **`.tsx`** file containing JSX that itself imports `getDocumentSmallIcon` from a shared component atom. This PR's `Submission/utils.ts` is a plain `.ts` whose only runtime import is `WORDS_UNIT_VALUE` from `@proofed/shared/config/units`; `JobTask` is a `type`, so that import is erased at compile time. This PR is strictly cleaner than the thing it imitates.
+
+**Correction to the original impact claim:** it stated that relocating the `Submission/` folder would "**silently** break two server routes." It would not be silent — the import path breaks, TypeScript errors, the build fails. That's the loudest possible failure mode, and it's the same exposure the three existing precedents already carry.
+
+**Resolution:** ❌ Rejected. Acting on this would make this PR the only call site of its kind that *doesn't* follow the house pattern, while leaving three worse instances untouched — a net loss in consistency for a low-severity smell. **Follow-up worth raising:** `getApprovedQuantities` is a *billing rule* and the API layer had it right first, so there's a genuine argument the API owns it and components should import down into it. That's a codebase-wide cleanup (move `getApprovedQuantities`, `getJobTaskPayload`, et al. to a neutral module together), not a change to this PR.
+
+### 2. Two sources of truth for the unit constants (util vs. test import different modules) — ✅ FIXED
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/JobManagement/partials/Submission/utils.test.ts]**
 
-**Function/Class:** getApprovedQuantities test suite
-
 **Severity:** low
 
-**Problem:** `utils.ts` imports `WORDS_UNIT_VALUE` from `@proofed/shared/config/units`, while the new `utils.test.ts` imports `WORDS_UNIT_VALUE`, `FIXED_RATE_UNIT_VALUE`, and `HOURLY_UNIT_VALUE` from `components/pages/partners/[partnerId]/projects/[projectId]/settings/consts`. Both modules independently define the same values (`1000` / `60` / `1`), so the tests pass — but the code-under-test and its test derive the "per-word" constant from different files.
+**Verified:** `utils.ts:1` imports `WORDS_UNIT_VALUE` from `@proofed/shared/config/units`; the test imported all three constants from `components/pages/partners/[partnerId]/projects/[projectId]/settings/consts`, which **redeclares** them independently at `consts.tsx:159-161` (no re-export). Both resolve to `1000` / `60` / `1`. The shared module is also the dominant convention: **44** files import from `@proofed/shared/config/units` vs **15** using the settings copy.
 
-**Impact:** Duplication of the unit constants across two modules (pre-existing in the repo, not introduced here). Should the two copies ever drift, the test could silently keep asserting against the wrong value while the util uses another. Low risk given both are long-stable literals.
+**Correction to the original impact claim:** it said drift would let the test "**silently** keep asserting against the wrong value." The opposite is true. The per-word case builds `chargeUnit: WORDS_UNIT_VALUE` and expects `850`; if either copy drifted, the util's `jobTask.chargeUnit === WORDS_UNIT_VALUE` goes false, it falls to the hourly branch, returns `180`, and the assertion **fails loudly**. Drift is caught, not hidden.
 
-**Fix:** Have the test import the same `WORDS_UNIT_VALUE` the util uses (`@proofed/shared/config/units`) for the per-word case, so test and code share one source. Longer term, the partner-settings `consts.tsx` copy of `WORDS_UNIT_VALUE`/`HOURLY_UNIT_VALUE`/`FIXED_RATE_UNIT_VALUE` should re-export from `@proofed/shared/config/units` rather than redeclare — out of scope for this PR.
+**Worth noting:** the util only ever references `WORDS_UNIT_VALUE` — the fixed branch keys off the `useFixed*` booleans, not the unit. So of the three constants the test imports, only `WORDS_UNIT_VALUE` is load-bearing; `FIXED_RATE_UNIT_VALUE` and `HOURLY_UNIT_VALUE` are illustrative test data.
 
-### 3. No regression test at the actual bug-path (`handleReviewJobSubmission`)
+**The original fix was a half-measure** — it suggested pointing only `WORDS_UNIT_VALUE` at shared, leaving a split import across two modules. `packages/shared/config/units.ts` already exports all three, so the settings import can be dropped entirely.
+
+**Resolution:** ✅ Applied — all three constants now import from `@proofed/shared/config/units`; the `settings/consts` import is gone. Tests 4/4, eslint clean, typecheck green. **Follow-up (out of scope):** `settings/consts.tsx` should re-export from shared rather than redeclare — affects the other 15 files.
+
+### 3. No regression test at the actual bug-path (`handleReviewJobSubmission`) — ⏭️ SKIPPED
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/JobManagement/partials/Submission/hooks.ts]**
 
-**Function/Class:** handleReviewJobSubmission
-
 **Severity:** low
 
-**Problem:** The production bug lived in `handleReviewJobSubmission`. The PR adds strong coverage for the extracted pure helper (`utils.test.ts`, 4 cases) and for the display flag (`JobSubmission.test.tsx`, 3 cases), but there is no test exercising the hook itself — that it calls `getApprovedQuantities` with the correctly-divided `approvedWorkTime`, and that `mutateJobTask` receives `{ id, approvedChargeQuantity, approvedPayQuantity, requestType: "Approval" }` per task.
+**Verified:** `Submission/` contains `consts.ts`, `hooks.ts`, `index.tsx`, `types.ts`, `utils.ts`, `utils.test.ts` — no `hooks.test.ts`. Hook tests *are* conventional in this folder tree (`useUpdateJobReturn.test.ts`, `useAddNewJob.test.ts`, `FormModal/hooks.test.ts`, `useReviewSubmissionFormState.test.tsx`), so the codebase does support this.
 
-**Impact:** The wiring that actually regressed (per-word-only guard → shared helper) is verified only transitively. A future edit to the hook that dropped or misused the helper wouldn't be caught by the new tests. Low risk — the helper is well-tested and the call site is a one-line spread — but the highest-value regression test for this exact ticket is the one not present.
+**Two things undercut the original "highest-value regression test" framing:**
 
-**Fix:** Optional but recommended: add a hook/integration test that mocks `usePatchJobTaskMutation` and asserts, for a Fixed Rate service task, that `mutateJobTask` is called with `approvedChargeQuantity`/`approvedPayQuantity` equal to the quoted quantity (not the entered minutes). This directly pins the behaviour the ticket is about.
+1. **Almost nothing in the hook is new.** The diff replaces inline per-word logic with `...getApprovedQuantities(jobTask, approvedWorkTime)`. The division above it (`Math.ceil(Number(data.approvedWorkTime) / serviceJobTasks.length)`, `hooks.ts:150-152`) is **unchanged context**, not new code. The genuinely new code is a one-line spread delegating to a helper with 4 passing tests covering exactly the ticket's behaviour. Arguably `utils.test.ts` *is* the highest-value test for this ticket — and it's present.
+2. **The test is more expensive than stated.** The suggested fix implies mocking `usePatchJobTaskMutation` alone. But `handleReviewJobSubmission` isn't returned from the hook — it's internal, reachable only via `onSubmit(data, true, actions)`, which first runs `validateSubmissionData`, `mutateOrder`, `prepareFiles`, and `startTracking`. A real test needs mocks for `usePatchOrder`, `usePatchJobTaskMutation`, `useUpdateJobMutation`, `useSidePanelContext`, `useWorkItemFiles`, `useUploadProgress`, and `useQueryClient`, plus an `order` fixture carrying both SERVICE and REVIEW jobs with `jobTasks` — roughly 100 lines of scaffolding to pin a one-line spread.
+
+**Resolution:** ⏭️ **Skipped by decision.** Deferred as a follow-up. Not blocking — the billing rule is well covered, hook↔API parity was verified by inspection, and the fix is manually verified on orders 21174/21175.
 
 ---
 
@@ -94,22 +115,19 @@ import { getApprovedQuantities } from "api/utils/jobs/getApprovedQuantities";
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⏭️ Skipped — user opted out | Not run. PR description claims all creative-portal tests pass (2 unrelated pre-existing failures on `develop` noted). |
-| `npx turbo run typecheck` | ⏭️ Skipped — user opted out | Not run. Static review found no type-safety concerns (all helper fields exist on `JobTask`; return type is `Partial<JobTask>`-compatible). |
-| `npx turbo run lint` | ⏭️ Skipped — user opted out | Not run. PR notes a pre-existing prettier failure in `JobReturnTimesTray/index.test.tsx` on `develop`, untouched here. |
-| `npx turbo run build` | ⏭️ Skipped — user opted out | Not run. PR claims build green (creative-portal). |
-
-**Validation was not run at the reviewer's request — re-run `test` / `typecheck` / `lint` / `build` on the PR branch before merging.**
+| `npx vitest run` (creative-portal, full) | ✅ **182 files, 1690 tests passed** | Includes the 4 helper tests and 3 display tests |
+| `npx turbo run typecheck --filter=@proofed/creative-portal` | ✅ Pass | Re-run after the `jobTask` rename |
+| `npx turbo run build --filter=@proofed/creative-portal` | ✅ Pass | |
+| `npx eslint` (creative-portal) | ⚠️ 5 errors | **Unrelated / pre-existing.** All 5 are `prettier/prettier` in `components/molecules/JobReturnTimesTray/index.test.tsx` — untouched here, present on develop (from #2359). Touched files are clean. **develop is currently red on lint.** |
 
 ---
 
 ## Tests
 
-- ✅ New unit tests for the extracted helper — `utils.test.ts` covers Fixed Rate, per-word, hourly, and mixed (fixed charge + hourly pay) tasks; assertions match the intended behaviour.
-- ✅ New display tests — `JobSubmission.test.tsx` verifies "Approved Time:" shows for hourly, is hidden for Fixed Rate (with "Editor's Work Time:" still shown), and stays hidden for per-word. Verified the test premise: `totalApprovedWorkTime` derives from `approvedPayQuantity`, so the Fixed Rate case (`approvedPayQuantity: 1`) is truthy and would have shown under the old condition — the assertion is meaningful.
-- ⚠️ No test at the `handleReviewJobSubmission` hook level — the exact code path that regressed (see Issue 3).
-- ⏭️ Full suite not executed (validation skipped). PR author reports creative-portal tests + typecheck + build green, with 2 unrelated pre-existing failures on `develop`.
-- ➖ E2E: not applicable / not run (pricing-logic fix).
+- ✅ Helper unit tests — `utils.test.ts`, **4/4 passing**. Covers Fixed Rate, per-word, hourly, and mixed (fixed charge + hourly pay) tasks.
+- ✅ Display tests — `JobSubmission.test.tsx`, **3/3 passing**. Verifies "Approved Time:" shows for hourly, is hidden for Fixed Rate (with "Editor's Work Time:" still shown), and stays hidden for per-word. Test premise verified: `totalApprovedWorkTime` derives from `approvedPayQuantity`, so the Fixed Rate case (`approvedPayQuantity: 1`) is truthy and would have shown under the old condition — the assertion is meaningful.
+- ⏭️ No test at the `handleReviewJobSubmission` hook level — **skipped by decision** (Issue 3).
+- ➖ E2E: not applicable (pricing-logic fix).
 
 ---
 
@@ -117,22 +135,31 @@ import { getApprovedQuantities } from "api/utils/jobs/getApprovedQuantities";
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Fixes the root cause; helper mirrors the API guard; charge & pay resolved independently |
-| Regression risk | ✅ Low — behaviour unchanged for per-word/hourly; only the fixed-rate path changes; import-source swap is value-equivalent (`WORDS_UNIT_VALUE === 1000` in both modules) |
-| Tests | ⚠️ Good coverage of the helper + display, but the actual hook path has no direct test |
-| Code quality | ✅ Good — DRY consolidation of 3 call sites; clean display refactor. One low-severity architectural smell (API → component import) |
-| Validation suite | ⏭️ Skipped — user opted out (re-run before merge) |
-| Mergeable state | ⏭️ Skipped — user opted out (GitHub reports `mergeable_state: clean`; no CI checks configured) |
+| Correctness | ✅ Fixes the root cause; helper mirrors the API guard; charge & pay resolved independently; hook↔API parity verified |
+| Regression risk | ✅ Low — behaviour unchanged for per-word/hourly; only the fixed-rate path changes; import-source swap is value-equivalent |
+| Tests | ✅ Helper + display covered and passing; hook-level gap knowingly deferred |
+| Code quality | ✅ Good — DRY consolidation of 3 call sites; clean display refactor. The api→component import follows the house pattern (Issue 1) |
+| Validation suite | ✅ Run — tests/typecheck/build green; lint red only on a pre-existing unrelated file |
+| Mergeable state | ✅ Clean |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions.**
+**Approve.** (Upgraded from "Approve with suggestions" — validation is now run and the actionable findings are applied.)
 
-The change is correct, targets the true root cause, and consolidates the divergent guards that let the bug exist. The findings are all low-severity and none block merge on correctness grounds.
+1. ~~Re-run the validation suite~~ → ✅ **Done.** 1690 tests ✅, typecheck ✅, build ✅. Lint's 5 errors are pre-existing and unrelated (`JobReturnTimesTray/index.test.tsx`, from #2359).
+2. ~~Relocate `getApprovedQuantities`~~ (Issue 1) → ❌ **Withdrawn for this PR** — it follows the established `api/` → `components/` pattern and is cleaner than the closest precedent. Raise as a codebase-wide cleanup instead.
+3. **Hook-level regression test** (Issue 3) → ⏭️ **Skipped by decision**, follow-up.
+4. ~~Point `utils.test.ts` at the same `WORDS_UNIT_VALUE` source~~ (Issue 2) → ✅ **Done**, and extended to all three constants.
+5. **Also applied from PR comments:** `task` → `jobTask` param rename across the helper and the hook's callback, aligning with the `JobTask` type and the two API call sites.
 
-1. **Re-run the validation suite** (`test` / `typecheck` / `lint` / `build`) on the PR branch before merging — it was skipped in this review, so pass/fail is unverified here.
-2. **Relocate `getApprovedQuantities`** out of the UI component folder into a neutral module (e.g. `api/utils/jobs/`) so the API routes don't import "up" into `components/` (Issue 1).
-3. Consider adding a **hook-level regression test** for `handleReviewJobSubmission` that pins the Fixed Rate charge/pay quantities (Issue 3).
-4. Minor: point `utils.test.ts` at the same `WORDS_UNIT_VALUE` source the util uses (Issue 2).
+**Post-merge follow-ups worth raising separately:**
+
+- **Dependency-direction cleanup (from Issue 1):** move `getApprovedQuantities`, `getJobTaskPayload`, and the other API-consumed component helpers to a neutral module so `api/` stops importing "up" into `components/`. Codebase-wide, ~8 files.
+- **`settings/consts.tsx` should re-export unit constants from `@proofed/shared/config/units`** rather than redeclare them (Issue 2) — affects 15 files.
+- **`Submission/hooks.ts` test coverage** (Issue 3).
+- **develop lint is red** — `JobReturnTimesTray/index.test.tsx`, 5 auto-fixable prettier errors, from #2359.
+- **PR description lists 3 files but the diff touches 7** — worth updating for the record.
+
+The change is correct, targets the true root cause, and consolidates the divergent guards that let the bug exist.
