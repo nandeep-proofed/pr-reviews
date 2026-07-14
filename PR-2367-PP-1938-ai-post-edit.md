@@ -23,6 +23,8 @@
 
 **Scope note:** one out-of-strict-scope change — removing the dead `ENABLE_AI_PRE_EDIT` guard. Justified (directly about AI-job rendering, Req 3.3) and behaviour-preserving, but beyond the minimal diff.
 
+> **Note (scope):** This review covers the workflow-builder / order-table half of PR #2367. The PR later grew a second half — the WYSIWYG editor rendering of AI Post-edit changes (overlay → per-pass bubble titles → pre+post merge for Review). That editor work is not assessed here.
+
 ---
 
 ## Architecture Analysis
@@ -33,19 +35,19 @@ The approach reuses the existing "AI collapses to `JobType.AI` for styling/statu
 
 ## Issues Found
 
-### 1. Legacy saved Order Management Views with `["AI"]` filter value
+### 1. Legacy saved Order Management Views with `["AI"]` filter value — ✅ RESOLVED
 
-**[File: components/molecules/tables/TableWithFilters/partials/CurrentJobFilter/consts.ts]**
+**[Files: components/molecules/tables/TableWithFilters/utils.ts · hooks.ts · hooks/useOrderManagementView.ts]**
 
-**Function/Class:** AVAILABLE_JOB_OPTIONS
+**Function/Class:** migrateLegacyJobFilter
 
-**Severity:** low
+**Severity:** low (cosmetic)
 
 **Problem:** The old filter option value was `JobType.AI` (`"AI"`). Saved OMVs / localStorage filters persisted before this change hold `currentJobFilter: ["AI"]`. That value no longer matches any entry in `AVAILABLE_JOB_OPTIONS` (now `"AI Pre-edit"` / `"AI Post-edit"`).
 
-**Impact:** BFF filtering still works (a bare `"AI"` value falls through to the `JobType.AI` comparison and matches all AI orders), so results are correct. But in the dropdown the legacy value won't render as a selected chip, so a user reopening a saved view sees no AI checkbox ticked even though it's filtering. Cosmetic, affects only pre-existing saved views.
+**Impact:** BFF filtering still works (a bare `"AI"` value falls through to the `JobType.AI` comparison and matches all AI orders), so results are correct. But in the dropdown the legacy value won't render as a selected chip, so a user reopening a saved view saw no AI checkbox ticked even though it was filtering. Cosmetic, affects only pre-existing saved views.
 
-**Fix:** Acceptable to leave (self-heals when the user re-applies). If we want it clean, migrate `"AI"` → `"AI Pre-edit"` when loading a saved view. Low priority.
+**Resolution (commit `f3cb3ff4`):** Added `migrateLegacyJobFilter` — maps legacy `JobType.AI` → `AiJobFilterValue.PRE_EDIT` and dedupes — and applied it wherever a saved filter is restored: the **localStorage load** (`hooks.ts`) and the **Order Management View select** (`useOrderManagementView`), including the **dirty-state baseline** so a selected legacy view isn't immediately flagged modified against its own migrated value. Mapping to Pre-edit is faithful, not lossy: pre-PP-1938 the sole AI option was value `"AI"` **labelled "AI Pre-edit"** (Post-edit didn't exist), so a saved `"AI"` was an AI Pre-edit filter. Unit-tested (5 cases: legacy → Pre-edit, granular values untouched, order preserved, dedupe, empty). typecheck / lint green.
 
 ### 2. Column label reflects raw backend prefix casing
 
@@ -101,6 +103,7 @@ _All creative-portal tests (where 100% of this PR's changes live) pass. The sing
 - ✅ Distinct column labels (Pre / Post / bare-AI fallback) — `TableWithFilters/utils.test.ts`
 - ✅ Legacy after-service Pre-edit grandfathered into optional bucket — `getWorkflowsList.test.ts`
 - ✅ Builder sparkle icon + Post-edit add path — `WorkflowBuilderModal/utils.test.ts`
+- ✅ Legacy bare-AI saved filter migrated to AI Pre-edit (Issue #1 fix) — `TableWithFilters/utils.test.ts`
 - ⚠️ Combined cap-of-3 lives in the component render (`index.tsx`) and isn't covered by an automated test — only the builder add-item path is. Manually verified in the dev app. (Low)
 
 ---
@@ -110,7 +113,7 @@ _All creative-portal tests (where 100% of this PR's changes live) pass. The sing
 | Aspect | Status |
 |---|---|
 | Correctness | ✅ Matches all ticket requirements (1.3 confirmed against live OMS endpoint) |
-| Regression risk | ✅ Low — additive; type-widening is a superset; one cosmetic legacy-view edge |
+| Regression risk | ✅ Low — additive; type-widening is a superset; the one cosmetic legacy-view edge is now migrated on load |
 | Tests | ✅ Good coverage (⚠️ cap-of-3 render path manual-only) |
 | Code quality | ✅ Idiomatic, minimal, well-commented |
 | Validation suite | ✅ creative-portal test 1696/1696, typecheck, lint all pass · ⚠️ 1 pre-existing locale-only failure in `@proofed/shared` + environmental build fail (neither caused by this PR) |
@@ -120,10 +123,11 @@ _All creative-portal tests (where 100% of this PR's changes live) pass. The sing
 
 ## Recommendation
 
-**Approve with suggestions** — the implementation is correct, well-scoped, and tested; the three issues found are all low severity. Before merge:
+**Approve with suggestions** — the implementation is correct, well-scoped, and tested. Of the three issues found (all low severity), #1 is now fixed. Before merge:
 
 1. **Confirm CI build is green.** Local `turbo build` fails environmentally (proven pre-existing on clean `develop` — compile succeeds, page-data collection throws a non-deterministic `MODULE_NOT_FOUND` on unrelated pages). Rely on CI's clean environment as the authoritative build gate.
 2. ~~**Verify the OMS task-type string** (Q1 / Req 1.3).~~ ✅ **RESOLVED** — confirmed against the live OMS `JobTaskTypes` endpoint (staging): `{ id: 36, name: "AI Post-edit", jobTypeId: 16, jobTypeName: "AI" }`, an exact case-sensitive match to the code. No change needed.
-3. *(Optional)* Product decision on whether Post-edit should be pinned to the final step vs. offered at every after-service gap.
+3. ~~**Issue #1** (legacy bare-AI saved filter shows no ticked option).~~ ✅ **RESOLVED** in commit `f3cb3ff4` — `migrateLegacyJobFilter` maps `"AI"` → `"AI Pre-edit"` at both the localStorage and OMV load paths (+ dirty baseline), unit-tested.
+4. *(Optional)* Product decision on whether Post-edit should be pinned to the final step vs. offered at every after-service gap.
 
-_Update: Q1 / Req 1.3 verified as resolved against the live OMS endpoint after the initial review — the only remaining pre-merge gate is the (environmental) CI build._
+_Update: Q1 / Req 1.3 verified resolved against the live OMS endpoint, and Issue #1 fixed in `f3cb3ff4`, after the initial review — the only remaining pre-merge gate is the (environmental) CI build._
