@@ -50,7 +50,7 @@ Because every enforcement point and every user-facing message dereferences these
 
 **Resolution:** Reworded the title and comments to decouple them from the cap (the 25 MB payload is now documented as an arbitrarily large stream chosen only to exercise back-pressure, explicitly noting it need not track the cap). Payload size and all assertions unchanged. Deliberately **not** resized to 50 MB — doubling the payload would double this memory test's runtime (it carries a 15 s timeout) for zero extra coverage, since the guarantee holds at any large size. Verified: 9/9 `streamingMultipart` tests pass, ESLint clean.
 
-### 2. `yarn bump-packages` not run for the shared-package change (process)
+### 2. `yarn bump-packages` not run for the shared-package change (process) — ✅ RESOLVED (not required, mark N/A)
 
 **[File: packages/shared/api/aiReviewFeedback/consts.ts]**
 
@@ -58,11 +58,14 @@ Because every enforcement point and every user-facing message dereferences these
 
 **Severity:** low
 
-**Problem:** The PR modifies `@proofed/shared`, and the PR checklist item "`yarn bump-packages` run and committed" is unchecked.
+**Problem:** The PR modifies `@proofed/shared`, and the PR checklist item "`yarn bump-packages` run and committed" is unchecked. Investigated whether the team convention requires a bump.
 
-**Impact:** If the repo's release process relies on shared-package version bumps, skipping it could affect downstream version tracking. Confirm whether the team's convention requires a bump for an internal-only constant change.
+**Finding — not required:** Version bumps in this repo are a **release-time** action, not per-PR:
 
-**Fix:** Run `yarn bump-packages` if the team convention requires it for shared-package edits, then commit; otherwise tick the checklist item as N/A.
+- The root/app version is `0.91.0-0`, last changed by `fix/PP-964` (#1603). Every feature PR merged to `develop` since — including the directly comparable AI-feedback work (`PP-1720` #2291/#2314, `PP-1811`, `PP-1633`) and the just-merged `PP-1987` (#2374/#2375) — merged **without** bumping the version. The dedicated version changes in history are all `chore: Updated version to oms-X.Y.Z` / `cp-X.Y.Z` commits cut on the `rc-oms-*` / `rc-cp-*` release branches (matches CLAUDE.md's "Release branches" convention).
+- `bump-packages` runs `yarn version --prerelease && yarn sync-versions` against the **app** version; `@proofed/shared` is pinned at `0.0.1` and consumed as an internal workspace dep (`transpilePackages`), never published — so it wouldn't even reflect the shared change. Running it here would spuriously increment the app prerelease and add needless merge-conflict surface against other in-flight branches.
+
+**Fix:** No action needed — tick the checklist item as **N/A**. The version bump belongs to the release cut, not this feature PR.
 
 ---
 
@@ -112,5 +115,5 @@ Before merge:
 
 1. Run the full validation suite once in a properly provisioned environment: `npx turbo run test` (all workspaces) and `npx turbo run build`. This review only executed targeted AI-feedback tests + typecheck + lint (per user choice); the full test run and build were not performed here.
 2. ~~(Optional, low) Update or reword the now-stale "25 MB production cap" comments in `packages/shared/utils/streamingMultipart.test.ts`~~ — ✅ **Done** in commit `55ca398fd` (comments/title reworded; 9/9 tests still pass).
-3. Confirm whether `yarn bump-packages` is required for the `@proofed/shared` constant change per team convention; run + commit or mark N/A.
+3. ~~Confirm whether `yarn bump-packages` is required for the `@proofed/shared` constant change per team convention~~ — ✅ **Resolved: not required** (version bumps are release-time on `rc-*` branches; recent feature PRs don't bump; `@proofed/shared` is unpublished/internal). Mark the checklist item **N/A**.
 4. Manual test per the ticket's Testing Notes: upload a 30k–100k-word document (≤50 MB) and confirm the AI Feedback card shows and drafts automatically; confirm a >100k-word or >50 MB document falls back to the manual form with the updated tooltip copy.
