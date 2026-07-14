@@ -2,7 +2,7 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2371
 **Jira:** https://proofed.atlassian.net/browse/PP-1981
-**Status:** Code Review — **all 3 issues triaged, verification pass complete**
+**Status:** Code Review — **all 3 issues triaged, verification pass complete, actionable items applied**
 
 ---
 
@@ -15,6 +15,8 @@
 | 3 | No regression test at the actual bug-path (`handleReviewJobSubmission`) | low | ⏭️ **Skipped** | Gap is real, but the only *new* code in the hook is a one-line spread whose logic has 4 passing tests. The division above it is unchanged context. Reaching the internal fn costs ~7 mocks. Deferred. |
 
 **Additional review point addressed (from PR comments, not in this report):** rename `getApprovedQuantities`' param `task` → `jobTask`. ✅ Applied — also updated the hook's map callback, aligning all three call sites with the `JobTask` type (the two API routes already used `jobTask`).
+
+**Applied on commit `5a0a3fc26`** (issues 2 + the rename), pushed to `fix/PP-1981-fixed-rate-review-submit-quantity`.
 
 ---
 
@@ -31,7 +33,7 @@
 
 **Scope note:** The `JobSubmission.tsx` display change and the consolidation of the two API routes onto the shared helper go slightly beyond the literal ticket, but both are tightly coupled to the same bug (a fixed-rate job would otherwise show a nonsensical "Approved Time: 1 min") and are reasonable. No unrelated scope creep.
 
-**Note on the PR description:** "Areas of Change" lists only 3 files, but the PR touches **7** (`JobSubmission.tsx`, `JobSubmission.test.tsx`, `postSubmitJob.ts`, `postSubmitJobStream.ts` are unlisted). Worth updating so the record matches the diff.
+**Note on the PR description — ✅ RESOLVED.** The description originally listed only 3 files under "Areas of Change" while the PR touches **7** (`JobSubmission.tsx`, `JobSubmission.test.tsx`, `postSubmitJob.ts`, `postSubmitJobStream.ts` were unlisted). It has since been rewritten: all 7 files are now listed and grouped by purpose (the fix / display parity / tests), the test count is corrected from 4 to 7, the `JobSubmission.tsx` scope rationale is stated explicitly, `calculateJobTaskPrice.ts` is recorded as verified-but-unchanged, and a "Review points addressed" section covers the rename + import swap.
 
 ---
 
@@ -92,7 +94,7 @@ api/service-configuration/types.ts:2                  → components/pages/partn
 
 **The original fix was a half-measure** — it suggested pointing only `WORDS_UNIT_VALUE` at shared, leaving a split import across two modules. `packages/shared/config/units.ts` already exports all three, so the settings import can be dropped entirely.
 
-**Resolution:** ✅ Applied — all three constants now import from `@proofed/shared/config/units`; the `settings/consts` import is gone. Tests 4/4, eslint clean, typecheck green. **Follow-up (out of scope):** `settings/consts.tsx` should re-export from shared rather than redeclare — affects the other 15 files.
+**Resolution:** ✅ Applied on `5a0a3fc26` — all three constants now import from `@proofed/shared/config/units`; the `settings/consts` import is gone. Tests 4/4, eslint clean, typecheck green. **Follow-up (out of scope):** `settings/consts.tsx` should re-export from shared rather than redeclare — affects the other 15 files.
 
 ### 3. No regression test at the actual bug-path (`handleReviewJobSubmission`) — ⏭️ SKIPPED
 
@@ -140,6 +142,7 @@ api/service-configuration/types.ts:2                  → components/pages/partn
 | Tests | ✅ Helper + display covered and passing; hook-level gap knowingly deferred |
 | Code quality | ✅ Good — DRY consolidation of 3 call sites; clean display refactor. The api→component import follows the house pattern (Issue 1) |
 | Validation suite | ✅ Run — tests/typecheck/build green; lint red only on a pre-existing unrelated file |
+| PR record | ✅ Description rewritten to match the 7-file diff |
 | Mergeable state | ✅ Clean |
 
 ---
@@ -151,8 +154,9 @@ api/service-configuration/types.ts:2                  → components/pages/partn
 1. ~~Re-run the validation suite~~ → ✅ **Done.** 1690 tests ✅, typecheck ✅, build ✅. Lint's 5 errors are pre-existing and unrelated (`JobReturnTimesTray/index.test.tsx`, from #2359).
 2. ~~Relocate `getApprovedQuantities`~~ (Issue 1) → ❌ **Withdrawn for this PR** — it follows the established `api/` → `components/` pattern and is cleaner than the closest precedent. Raise as a codebase-wide cleanup instead.
 3. **Hook-level regression test** (Issue 3) → ⏭️ **Skipped by decision**, follow-up.
-4. ~~Point `utils.test.ts` at the same `WORDS_UNIT_VALUE` source~~ (Issue 2) → ✅ **Done**, and extended to all three constants.
+4. ~~Point `utils.test.ts` at the same `WORDS_UNIT_VALUE` source~~ (Issue 2) → ✅ **Done** on `5a0a3fc26`, and extended to all three constants.
 5. **Also applied from PR comments:** `task` → `jobTask` param rename across the helper and the hook's callback, aligning with the `JobTask` type and the two API call sites.
+6. ~~PR description lists 3 files but the diff touches 7~~ → ✅ **Done.** Rewritten to list all 7, grouped by purpose, with the corrected test count and the `JobSubmission.tsx` scope rationale.
 
 **Post-merge follow-ups worth raising separately:**
 
@@ -160,6 +164,5 @@ api/service-configuration/types.ts:2                  → components/pages/partn
 - **`settings/consts.tsx` should re-export unit constants from `@proofed/shared/config/units`** rather than redeclare them (Issue 2) — affects 15 files.
 - **`Submission/hooks.ts` test coverage** (Issue 3).
 - **develop lint is red** — `JobReturnTimesTray/index.test.tsx`, 5 auto-fixable prettier errors, from #2359.
-- **PR description lists 3 files but the diff touches 7** — worth updating for the record.
 
 The change is correct, targets the true root cause, and consolidates the divergent guards that let the bug exist.
