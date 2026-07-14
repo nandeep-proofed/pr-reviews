@@ -19,7 +19,7 @@
 | Unchanged: Proofed-platform only, `aiEnabled`, env toggle, formats, polling, cancel, failure fallback | None of that code touched | ✅ Addressed (scope guard respected) |
 | User-facing copy updated to new limits (limits tooltip + submission error messaging) | `AI_UNAVAILABLE_TOOLTIP` "over 30k words" → "over 100k words" (MB already interpolated); both server 413 messages interpolate the constants (`…50 MB upload limit`, `…100,000-word AI feedback limit`) so they auto-update | ✅ Addressed |
 
-**Scope creep:** None. The PR is limited to the two threshold values, the one hardcoded copy string, two stale code comments, and one over-limit test fixture. No refactors or bonus fixes.
+**Scope creep:** None. The PR is limited to the two threshold values, the one hardcoded copy string, two stale code comments, and one over-limit test fixture. No refactors or bonus fixes. (A follow-up commit from this review also reworded stale comments in the `streamingMultipart` test — see issue #1.)
 
 ---
 
@@ -36,7 +36,7 @@ Because every enforcement point and every user-facing message dereferences these
 
 ## Issues Found
 
-### 1. Stale "25 MB production cap" comments in an unrelated streaming test
+### 1. Stale "25 MB production cap" comments in the streaming-upload test — ✅ RESOLVED (commit `55ca398fd`)
 
 **[File: packages/shared/utils/streamingMultipart.test.ts]**
 
@@ -44,16 +44,11 @@ Because every enforcement point and every user-facing message dereferences these
 
 **Severity:** low
 
-**Problem:** The test's `it(...)` title and several inline comments describe its 400-chunk fixture as "the 25 MB production cap" / "matches the production upload cap". With this PR the AI-feedback upload cap becomes 50 MB, so those comments are now inaccurate.
+**Problem:** The test's `it(...)` title and several inline comments described its 400-chunk fixture as "the 25 MB production cap" / "matches the production upload cap". `streamingMultipart` has exactly one consumer — `apps/creative-portal/api/aiReviewFeedback/strategy/ai-review-feedback.ts`, which streams the reviewer file to Proofed.ai — so "the production upload cap" *is* `MAX_AI_REVIEW_FEEDBACK_FILE_SIZE_BYTES`, the constant this PR raises to 50 MB. (An earlier draft of this review called it an "unrelated" test — that was wrong; it is the AI-feedback upload path's own utility test.) The comments were therefore stale after the bump.
 
-**Impact:** Cosmetic only. The test asserts streaming/back-pressure mechanics using a hardcoded chunk count that is independent of the AI-feedback constant, so behavior is unaffected — but the "production cap" wording is now misleading to a future reader. Left out of this PR's changed set deliberately (out of scope), noting it here for awareness.
+**Impact:** Cosmetic only. The test asserts streaming/back-pressure mechanics (`peak <= 128 KB`) using a hardcoded chunk count that is independent of the cap value, so behavior and pass/fail were unaffected — only the "production cap" wording misdescribed why `400` was chosen.
 
-**Fix:** Optional follow-up — either drop the "production cap" framing (it's really just an arbitrary 25 MB stream-size for the memory test) or update the wording. No functional change needed:
-
-```typescript
-// e.g. reword to make the number self-standing:
-const totalChunks = 400; // 25 MB test payload — exercises back-pressure
-```
+**Resolution:** Reworded the title and comments to decouple them from the cap (the 25 MB payload is now documented as an arbitrarily large stream chosen only to exercise back-pressure, explicitly noting it need not track the cap). Payload size and all assertions unchanged. Deliberately **not** resized to 50 MB — doubling the payload would double this memory test's runtime (it carries a 15 s timeout) for zero extra coverage, since the guarantee holds at any large size. Verified: 9/9 `streamingMultipart` tests pass, ESLint clean.
 
 ### 2. `yarn bump-packages` not run for the shared-package change (process)
 
@@ -75,12 +70,12 @@ const totalChunks = 400; // 25 MB test payload — exercises back-pressure
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⚠️ Partial | Targeted AI-feedback suites run green this session: `AiFeedbackPanel` + `services/aiReviewFeedback` + `useAiFeedbackEligibility` = 133 pass; `useReviewSubmissionFormState` + `AiUnavailableHeader` = 27 pass. Full-repo `turbo run test` not run (user opted to reuse earlier results). |
+| `npx turbo run test` | ⚠️ Partial | Targeted AI-feedback suites run green this session: `AiFeedbackPanel` + `services/aiReviewFeedback` + `useAiFeedbackEligibility` = 133 pass; `useReviewSubmissionFormState` + `AiUnavailableHeader` = 27 pass; `streamingMultipart` = 9 pass. Full-repo `turbo run test` not run (user opted to reuse earlier results). |
 | `npx turbo run typecheck` | ✅ | `@proofed/creative-portal` + `@proofed/shared` — 0 errors. |
-| `npx turbo run lint` | ✅ | ESLint on all 6 changed files — 0 errors. |
+| `npx turbo run lint` | ✅ | ESLint on all changed files — 0 errors. |
 | `npx turbo run build` | ⏭️ Not run | User opted to reuse earlier results; build was not executed. |
 
-> Validation was run against the main worktree by temporarily applying the 6 files (byte-identical between `develop` and the working branch), then reverting. The PR-branch worktree can't run a fresh `yarn install` because `TIPTAP_PRO_TOKEN` isn't set in this environment.
+> Validation was run against the main worktree by temporarily applying the changed files (byte-identical between `develop` and the working branch), then reverting. The PR-branch worktree can't run a fresh `yarn install` because `TIPTAP_PRO_TOKEN` isn't set in this environment.
 
 ---
 
@@ -116,6 +111,6 @@ The implementation correctly and completely satisfies every PP-1991 acceptance c
 Before merge:
 
 1. Run the full validation suite once in a properly provisioned environment: `npx turbo run test` (all workspaces) and `npx turbo run build`. This review only executed targeted AI-feedback tests + typecheck + lint (per user choice); the full test run and build were not performed here.
-2. (Optional, low) Update or reword the now-stale "25 MB production cap" comments in `packages/shared/utils/streamingMultipart.test.ts` — cosmetic only, no behavior change.
+2. ~~(Optional, low) Update or reword the now-stale "25 MB production cap" comments in `packages/shared/utils/streamingMultipart.test.ts`~~ — ✅ **Done** in commit `55ca398fd` (comments/title reworded; 9/9 tests still pass).
 3. Confirm whether `yarn bump-packages` is required for the `@proofed/shared` constant change per team convention; run + commit or mark N/A.
 4. Manual test per the ticket's Testing Notes: upload a 30k–100k-word document (≤50 MB) and confirm the AI Feedback card shows and drafts automatically; confirm a >100k-word or >50 MB document falls back to the manual form with the updated tooltip copy.
