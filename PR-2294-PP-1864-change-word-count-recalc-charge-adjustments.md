@@ -2,7 +2,28 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2294
 **Jira:** https://proofed.atlassian.net/browse/PP-1864
-**Status:** Code Review
+**Status:** Code Review — **all 4 issues triaged, verification pass complete**
+
+> ## ⛔ MERGE BLOCKER — branch is 42 commits behind develop, 43 tests failing
+>
+> The full `creative-portal` suite fails on this branch: **6 files, 43 tests** (`useUpdateJobReturn` PP-1642, `BulkDeadlineModal` PP-1644, `JobReturnTimesTray`). **None are caused by this PR** — proven by stashing all working changes and re-running: the baseline is byte-identical (6 files / 43 tests / 1446 total, zero delta).
+>
+> **The cause is branch staleness, not a pre-existing develop failure.** Merge-base is `23d270128` (PP-1440) — **42 commits behind** develop. Checking out develop (`30139ba35`) and running those same three suites: **63 passed, 0 failed**. Develop also has *more* tests in those files (63 vs 34), so the branch carries outdated copies its own base cannot satisfy.
+>
+> **Action required before merge: merge/rebase develop into this branch and re-run.** This matters beyond the red tests — 42 commits of drift on a PR that reuses `calculateOrderChargeAdjustments` means the billing utility may have moved underneath it.
+
+---
+
+## Review Outcomes
+
+| # | Issue | Severity | Status | Resolution |
+|---|---|---|---|---|
+| 1 | Format premium silently keeps its stale value if submitted before the `PremiumChargeRate` query resolves | low | ⏭️ **Skipped** | Chain verified end-to-end — the finding is **real**. Not fixed here: `useAddNewJob.ts:59-60` carries the byte-identical `= []` pattern, so a one-site fix would leave the twin hole and two contradictory patterns. Follow-up should cover both call sites + the root null-ambiguity. |
+| 2 | Partial-failure window: order persisted and modal closed before job-task updates complete | low | ⏭️ **Acknowledged** | Ordering is pre-existing (confirmed on develop). The suggested reorder **does not fix it** — without a transaction it just relocates the inconsistency. No change, per the issue's own "No change required here". |
+| 3 | Caller relies on an implementation detail of `mode: "add"`, not its documented contract | low | ✅ **Fixed** | Docstring rewritten on `a8a585212`. This PR introduced the **only** out-of-contract caller, so the mismatch is squarely this PR's. Fixed at the utility (the wrong contract), not via a call-site comment. |
+| 4 | Test carries a leftover mock for a module the hook no longer imports | low | ✅ **Fixed** | `api/jobTypes/enums` mock and `jobType` fixture fields removed on `a8a585212`. Suite still 8/8, confirming the mock was inert. |
+
+**Applied on commit `a8a585212`**, pushed to `fix/PP-1864-change-word-count-recalc-charge-adjustments`.
 
 ---
 
@@ -13,89 +34,110 @@
 | `workItemSize` updates to the new value | `updateOrder({ ...order, workItemSize: updatedWorkItemSize, ...chargeAdjustments })` | ✅ Addressed |
 | Per-word job tasks' `quotedChargeQuantity` / `quotedPayQuantity` update to the new value | `updatedJobTasks` maps per-word tasks (matched by `chargeUnit`/`payUnit`) to the new size, then each is sent via `updateJobTask` | ✅ Addressed |
 | `minimumChargeAdjustmentAmount` / `minimumChargeRate` recalculated against new subtotal (cleared to 0 when above threshold) | `calculateOrderChargeAdjustments({ mode: "add" })` recomputes the subtotal from `updatedJobTasks`; add-mode sets a fresh adjustment when `subtotal < minimumChargeAmount`, or clears to 0 when `subtotal >= minimumChargeAmount` and a prior adjustment existed | ✅ Addressed |
-| `formatPremiumAmount` / `formatPremiumRate` recalculated against new subtotal | Same utility recomputes format premium via `calculateFormatPremium` using the new subtotal + (possibly new) min-charge adjustment; result folded into the single `updateOrder` call | ✅ Addressed |
+| `formatPremiumAmount` / `formatPremiumRate` recalculated against new subtotal | Same utility recomputes format premium via `calculateFormatPremium` using the new subtotal + (possibly new) min-charge adjustment; result folded into the single `updateOrder` call | ✅ Addressed (caveat: Issue 1) |
 
 **Scope beyond Jira (all reasonable):**
 - Removed the now-dead `serviceJobIds` / `serviceJobTasks` `useMemo`s and the `JobType` import — `serviceJobTasks` was only ever referenced in the dependency array, never in the callback body, so this is pure dead-code removal.
-- Removed the `// eslint-disable-next-line react-hooks/exhaustive-deps` and corrected the dependency array (added `jobTasks`, `masterReferencesCharge`; removed `serviceJobTasks`), so exhaustive-deps now passes honestly.
-- Added a new `hooks.test.ts` (previously none) — satisfies the "every PR must include tests" requirement.
+- Removed the `// eslint-disable-next-line react-hooks/exhaustive-deps` and corrected the dependency array, so exhaustive-deps now passes honestly.
+- Added a new `hooks.test.ts` (previously none).
 
 ---
 
 ## Architecture Analysis
 
-The fix is small, surgical, and correct in approach. Rather than reimplementing the pricing math, it reuses the existing `calculateOrderChargeAdjustments` utility with `mode: "add"` — the same utility and mode already used by `useAddNewJob.ts` when a chargeable job is added to a live order. The reuse is idiomatic and matches CLAUDE.md's reuse-first convention.
+The fix is small, surgical, and correct in approach. Rather than reimplementing the pricing math, it reuses the existing `calculateOrderChargeAdjustments` utility with `mode: "add"` — the same utility and mode already used by `useAddNewJob.ts`. The reuse is idiomatic and matches CLAUDE.md's reuse-first convention.
 
 Key structural improvements:
-- `updatedJobTasks` is computed **once** and used for both the charge recalculation (subtotal input) and the actual `updateJobTask` persistence. This removes the prior duplication where the per-word mapping was inlined into the `updateJobTask` call, and guarantees the recalculated charge fields reflect exactly the job-task state that will be persisted.
-- Charge adjustments are folded into the **single** existing `updateOrder` call (`...order, workItemSize, ...chargeAdjustments`) rather than a second round-trip.
+- `updatedJobTasks` is computed **once** and used for both the charge recalculation (subtotal input) and the `updateJobTask` persistence, guaranteeing the recalculated charge fields reflect exactly the job-task state that will be persisted.
+- Charge adjustments are folded into the **single** existing `updateOrder` call rather than a second round-trip.
 
 Correctness of `mode: "add"` for a word-count change (which can move the subtotal **up or down**) was verified against the utility source:
-- `computeAddModeAdjustments` handles both directions: `subtotal < minimumChargeAmount` → apply/refresh adjustment; `subtotal >= minimumChargeAmount && priorAdjustment > 0` → clear to 0. So a decrease that drops below the threshold correctly re-applies an adjustment, and an increase that crosses above correctly clears it.
-- `calculateOrderSubtotalFromJobTasks` filters by `chargeable` internally, so passing all `updatedJobTasks` (per-word + hourly/non-chargeable) is safe.
-- Format premium is recomputed against `subtotal + (new or existing) minimumChargeAdjustmentAmount`, matching the documented billing behaviour, and only overrides when the value actually changes.
+- `computeAddModeAdjustments` handles both directions: `subtotal < minimumChargeAmount` → apply/refresh; `subtotal >= minimumChargeAmount && priorAdjustment > 0` → clear to 0.
+- `calculateOrderSubtotalFromJobTasks` filters by `chargeable` internally, so passing all `updatedJobTasks` is safe.
+- Format premium is recomputed against `subtotal + (new or existing) minimumChargeAdjustmentAmount`, and only overrides when the value actually changes.
 
-The manual verification in the PR description (order 20907: 837 → 1200 words, min-charge adjustment clears to €0, format premium recalculates to €12.48, total €60.00 → €74.88) reconciles with this logic.
+**Verified this pass — the subtotal genuinely does not depend on the master reference.** `calculateOrderSubtotalFromJobTasks` → `getJobTotalPrice({ withoutPremium: true })` skips the premium block, and each per-task `calculateJobTaskPrice` passes `usePremiumRate: false`, which makes `getJobTaskRate` return `rate` before it ever reads `predefinedMasterReference`. This is what confines Issue 1's blast radius to format premium alone.
+
+The manual verification in the PR description (order 20907: 837 → 1200 words, min-charge clears to €0, format premium recalculates to €12.48, total €60.00 → €74.88) reconciles with this logic.
 
 ---
 
 ## Issues Found
 
-### 1. Format premium silently keeps its stale value if submitted before the `PremiumChargeRate` query resolves
+### 1. Format premium silently keeps its stale value if the `PremiumChargeRate` query is unresolved — ⏭️ SKIPPED (deferred)
 
-**[File: apps/creative-portal/components/pages/admin-area/orders/partials/OrderManagementSidebar/partials/ChangeWordCountModal/hooks.ts]**
-
-**Function/Class:** useChangeWordCountModal (onSubmit)
+**[File: .../ChangeWordCountModal/hooks.ts]**
 
 **Severity:** low
 
-**Problem:** `masterReferencesCharge` comes from `useMasterReferenceQuery(ReferenceName.PremiumChargeRate)` and defaults to `[]` while the query is loading. If a user submits the modal during that window, `calculateFormatPremium` finds no matching reference (`!reference?.value`) and returns `null`, so `computeAddModeAdjustments` leaves the format-premium fields unset — the order keeps its pre-change (stale) `formatPremiumAmount` / `formatPremiumRate` via the `...order` spread. The min-charge recalculation still works (it doesn't depend on the reference), so only the format-premium half of the fix silently no-ops.
+**Chain verified end-to-end — the finding is real:**
 
-**Impact:** In the narrow race where the modal is submitted before the master-reference query settles, the exact over/under-billing this ticket fixes could partially persist for format-premium orders. Low likelihood — the value is React-Query-cached and this mirrors the existing `useAddNewJob.ts` behaviour — but there is no guard preventing submission while the query is unresolved.
+1. `hooks.ts` — `const { data: masterReferencesCharge = [] } = useMasterReferenceQuery(ReferenceName.PremiumChargeRate)`. While loading, `data` is `undefined` → `[]`.
+2. `calculateFormatPremium` (sync mode) — `predefinedMasterReference?.find(ref => ref.name === masterReferenceKey)` over `[]` → `undefined` → `if (!reference?.value) return null`.
+3. `computeAddModeAdjustments` — `if (premium && ...)` skipped, so `result` carries no format-premium keys.
+4. `hooks.ts` — `updateOrder({ ...order, workItemSize, ...chargeAdjustments })` re-persists the **stale** `formatPremiumAmount` / `formatPremiumRate` via the spread.
 
-**Fix:** Optional hardening — disable/guard submit until the reference query is ready, e.g. surface `isLoading` from the query and block `onSubmit` (or the submit button) when references haven't loaded. Not a blocker; matches the established pattern.
+**A sharper framing than the original.** One line above in this same hook, `useMasterReferenceUnits` handles the identical concern **correctly** — it defaults `chargePerWordUnit`/`payPerWordUnit` to `DEFAULT_PER_WORD_UNIT = 1000` while loading, so per-word matching never silently degrades. The file already demonstrates the right pattern; `masterReferencesCharge = []` is the odd one out. That is a better argument for a guard than "there's a race".
 
-### 2. Partial-failure window: order (incl. recalculated charge fields) is persisted and the modal closes before job-task updates complete
+**The original understates the failure mode.** It frames this as a submit-before-load *race*. But if the query **fails** rather than being slow, `data` stays `undefined` → `[]` **permanently** — not a narrow window, but persistent silent mis-billing for that session. A submit-while-loading guard would not catch that variant at all.
 
-**[File: apps/creative-portal/components/pages/admin-area/orders/partials/OrderManagementSidebar/partials/ChangeWordCountModal/hooks.ts]**
+**Why it's deferred:** `useAddNewJob.ts:59-60` carries the byte-identical `= []` pattern with no guard. This PR copied an existing pattern in order to reuse an existing utility. Fixing only this call site leaves the twin hole and leaves two contradictory patterns with no signal as to which is intended.
 
-**Function/Class:** useChangeWordCountModal (onSubmit)
+**Root cause worth naming for the follow-up:** `calculateFormatPremium` returns `null` for two different things — "this isn't a premium format" (legitimate, ignore) and "the reference is unavailable" (a failure). Callers cannot distinguish them, so a data failure is silently treated as a no-op. **Follow-up:** cover both call sites and resolve the null-ambiguity at the utility.
 
-**Severity:** low
+### 2. Partial-failure window: order persisted and modal closed before job-task updates complete — ⏭️ ACKNOWLEDGED (no change)
 
-**Problem:** `onSubmit` awaits `updateOrder(...)`, closes the modal, then awaits `Promise.all(updatedJobTasks.map(updateJobTask))`. If `updateOrder` succeeds but one of the `updateJobTask` calls fails, the order has already been written with the new `workItemSize` **and** the recalculated charge adjustments derived from job-task quantities that never persisted, leaving order-level and task-level state inconsistent. The `catch` fires `showDefaultErrorToast`, but the modal is already closed and the partial write stands.
-
-**Impact:** Edge-case data inconsistency on a mid-flight API failure. The ordering (order first, then tasks) is **pre-existing** — the PR does not introduce it — but folding the recalculated charge fields into the same first call slightly widens the blast radius of a partial failure. Low severity given failures are rare and refresh calls follow.
-
-**Fix:** Out of scope for this bug fix, but worth a follow-up: consider updating job tasks before (or transactionally with) the order, or only closing the modal after all writes resolve. No change required here.
-
-### 3. Caller relies on an implementation detail of `mode: "add"`, not its documented contract
-
-**[File: apps/creative-portal/components/pages/admin-area/orders/partials/OrderManagementSidebar/partials/ChangeWordCountModal/hooks.ts]**
-
-**Function/Class:** useChangeWordCountModal (onSubmit) → calculateOrderChargeAdjustments
+**[File: .../ChangeWordCountModal/hooks.ts]**
 
 **Severity:** low
 
-**Problem:** `calculateOrderChargeAdjustments`'s docstring states: *"Caller must ensure: for add mode, a chargeable job was added."* This caller does not add a job — it relies on add-mode performing a full subtotal recompute that happens to handle both increases and decreases. That is true of the current implementation, so it works correctly today, but the usage sits outside the utility's stated precondition.
+**Confirmed pre-existing.** The sequence on develop is already `updateOrder` → `setIsChangeWordCountModalOpen(false)` → `updateJobTask` × n. The PR did not introduce it.
 
-**Impact:** No functional bug now. Risk is future maintainability: if someone later "optimizes" add-mode on the assumption that the subtotal only ever grows (per the docstring), this word-count caller would silently break for downward changes.
+**The observation earns its place:** folding the recalculated charge fields into that first call means the order now carries `minimumChargeAdjustmentAmount` / `formatPremium*` **derived from job-task quantities that have not persisted yet**. Previously only `workItemSize` was exposed; now the money fields are too. That coupling is new.
 
-**Fix:** Either broaden the utility's docstring/contract to acknowledge "full recalculation" callers (word-count change), or add a brief comment at this call site noting the reliance on add-mode's full-recompute behaviour. Documentation-only.
+**But the proposed fix does not work.** There is no transaction available — these are two independent mutations — so reordering relocates the inconsistency rather than removing it:
+- *Order-first failure (today):* order says 1200 words with adjustments for 1200; tasks still say 500.
+- *Tasks-first failure (proposed):* tasks say 1200; order says 500 words with adjustments for 500.
 
-### 4. Test carries a leftover mock for a module the hook no longer imports
+Both leave order-level and task-level state disagreeing, and both mis-bill. Swapping buys nothing without a backend endpoint writing both atomically. The suggestion would churn a working path for no gain.
 
-**[File: apps/creative-portal/components/pages/admin-area/orders/partials/OrderManagementSidebar/partials/ChangeWordCountModal/hooks.test.ts]**
+**The one genuine improvement** in the suggestion is deferring the modal close until after `Promise.all` — today a job-task failure toasts against a dismissed modal with no retry path. Two lines, but pre-existing behaviour and a UX change, so not this PR's job.
 
-**Function/Class:** test setup
+**Test gap noted:** there is a case asserting that when `updateOrder` rejects, `updateJobTask` is never called. There is **no** case for the inverse — `updateOrder` succeeding and a `updateJobTask` rejecting — which is exactly the partial-write window this issue describes.
+
+**Resolution:** ⏭️ No change, matching the issue's own "No change required here". Follow-up for the real fix (atomic write, or at minimum deferring the modal close) — not the reorder.
+
+### 3. Caller relies on an implementation detail of `mode: "add"`, not its documented contract — ✅ FIXED
+
+**[File: apps/creative-portal/utils/calculateOrderChargeAdjustments.ts]**
 
 **Severity:** low
 
-**Problem:** The test mocks `vi.mock("api/jobTypes/enums", () => ({ JobType: { SERVICE: "Service" } }))`, but the fix removes the `JobType` import from `hooks.ts`, so nothing in the unit under test consumes it. Similarly `mockJobs`' `jobType` fields are no longer read by the hook (only `jobs.map(({ id }) => ...)` is used).
+**Verified — and this is the one finding squarely attributable to this PR.** All three callers:
 
-**Impact:** None functionally — harmless dead mock. Minor test-hygiene nit; can mislead a future reader into thinking `JobType` still matters here.
+| Caller | Mode | Satisfies old docstring? |
+|---|---|---|
+| `useAddNewJob.ts:131` | `add` | ✅ adds a chargeable job |
+| `OrderManagment/hooks.tsx:365` | `remove` | ✅ passes `removedChargeableJobsSubtotal` |
+| `ChangeWordCountModal/hooks.ts:67` — **new in this PR** | `add` | ❌ adds no job |
 
-**Fix:** Optionally drop the `api/jobTypes/enums` mock (and simplify `mockJobs` to just `{ id }`). Cosmetic.
+**The docstring was wrong, not merely narrow.** `computeAddModeAdjustments` never references an added job — it only recomputes the subtotal from `jobTasks` and compares against `minimumChargeAmount` in both directions. The "a chargeable job was added" precondition is **vestigial** for add mode; it gates no logic. (For remove mode it is real — `removedChargeableJobsSubtotal` genuinely depends on it.) So the docstring over-claimed a precondition the implementation never had, which made this caller *look* illegitimate when it isn't.
+
+**Fixed at the utility, not the call site.** The original offered two options; the call-site comment was the wrong one — a comment saying "we rely on add-mode's full-recompute behaviour" explains why the code is correct, which is noise that rots. The docstring is the actual contract and the actual defect.
+
+**Resolution:** ✅ Docstring rewritten on `a8a585212` to describe what add mode actually guarantees (full recompute, both directions, pass post-change job tasks) while keeping remove mode's real precondition. Closes the named risk: someone "optimizing" add-mode on the false assumption that the subtotal only grows, silently breaking downward word-count changes.
+
+### 4. Test carries a leftover mock for a module the hook no longer imports — ✅ FIXED
+
+**[File: .../ChangeWordCountModal/hooks.test.ts]**
+
+**Severity:** low
+
+**Verified:** `hooks.ts` no longer imports `JobType` or `api/jobTypes/enums` (the PR removed it with the `serviceJobIds` filter), and the hook's only use of `jobs` is `jobs.map(({ id }) => id.toString())`, so the `jobType` fixture fields were never read. Confirmed not needed transitively — every other import in the hook is itself mocked; the only unmocked imports are `./consts` and `./utils`, neither of which touches job types.
+
+**Sharper than cosmetic:** this PR *removed* the `jobType`-based filtering. Leaving a `JobType` mock and `jobType` fields behind implies that filtering still exists — a fossil of exactly the code the PR deleted, i.e. a false signal about what the hook does.
+
+**Resolution:** ✅ Mock and fixture fields removed on `a8a585212`. Suite still **8/8**, confirming the mock was inert.
 
 ---
 
@@ -103,23 +145,20 @@ The manual verification in the PR description (order 20907: 837 → 1200 words, 
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⏭️ Skipped | Skipped — user opted out |
-| `npx turbo run typecheck` | ⏭️ Skipped | Skipped — user opted out |
-| `npx turbo run lint` | ⏭️ Skipped | Skipped — user opted out |
-| `npx turbo run build` | ⏭️ Skipped | Skipped — user opted out |
-
-> Validation suite was **not run** (user opted out). Re-run `test` / `typecheck` / `lint` / `build` on the PR branch before merging — the recommendation below cannot rely on validation passing.
+| `npx vitest run` (creative-portal, full) | ❌ **6 files / 43 tests failed** | **Not caused by this PR** — proven by stash-and-rerun (baseline identical, zero delta). **Caused by branch staleness**: 42 commits behind develop; develop passes the same suites **63/63**. See MERGE BLOCKER above. |
+| `ChangeWordCountModal/hooks.test.ts` | ✅ **8/8 passed** | Still green after removing the dead mock |
+| `npx turbo run typecheck --filter=@proofed/creative-portal` | ✅ Pass | |
+| `npx turbo run build --filter=@proofed/creative-portal` | ✅ Pass | |
+| `npx eslint` / `prettier` (touched files) | ✅ Clean | |
 
 ---
 
 ## Tests
 
-- ✅ New `hooks.test.ts` added (8 cases) — satisfies the "every PR must include tests" requirement.
-- ✅ Wiring covered: args passed to `calculateOrderChargeAdjustments` (`mode: "add"`, same `order`, `masterReferencesCharge`, per-word tasks updated, non-per-word untouched).
-- ✅ Threshold-cross clears min-charge adjustment; drop-below re-applies one; format-premium-only forwarding; empty-adjustments case preserves existing order fields.
-- ✅ Per-word job-task updates and non-per-word pass-through; success toast + all three refresh calls; error path delegates to `showDefaultErrorToast` and does not call `updateJobTask`.
-- ⚠️ Tests mock `calculateOrderChargeAdjustments` wholesale, so they verify the **hook's wiring**, not the pricing math. That is an appropriate unit boundary, **but** the utility itself has **no dedicated test file** (`calculateOrderChargeAdjustments.ts` is only exercised indirectly via `useAddNewJob.test.ts`). The real numbers in this ticket (e.g. clear-to-0 + 20% × new subtotal) are not asserted end-to-end anywhere. Pre-existing gap; consider adding direct unit tests for the utility in a follow-up.
-- ⚠️ Automated validation suite not executed (see Validation Checks).
+- ✅ New `hooks.test.ts` (8 cases) — verified passing.
+- ✅ Wiring covered: args passed to `calculateOrderChargeAdjustments` (`mode: "add"`, same `order`, `masterReferencesCharge`, per-word tasks updated, non-per-word untouched); threshold-cross clears; drop-below re-applies; format-premium-only forwarding; empty-adjustments preserves existing order fields; per-word task updates; success toast + all three refresh calls; error path delegates to `showDefaultErrorToast`.
+- ⚠️ Tests mock `calculateOrderChargeAdjustments` wholesale, so they verify the **hook's wiring**, not the pricing math. That is an appropriate unit boundary, **but** the utility itself has **no dedicated test file** (confirmed) — it is only exercised indirectly via `useAddNewJob.test.ts`. The real numbers in this ticket are not asserted end-to-end anywhere. Pre-existing gap; worth a follow-up.
+- ⚠️ No test for the partial-write window (Issue 2): `updateOrder` succeeding while a `updateJobTask` rejects.
 
 ---
 
@@ -130,20 +169,27 @@ The manual verification in the PR description (order 20907: 837 → 1200 words, 
 | Correctness | ✅ Sound — root cause fixed, both threshold directions handled |
 | Regression risk | ✅ Low — dead-code removal + reuse of an already-shipped utility/pattern |
 | Tests | ⚠️ Good wiring coverage; underlying utility math untested directly |
-| Code quality | ✅ Clean — dedupes job-task mapping, honest deps array |
-| Validation suite | ⚠️ Skipped — user opted out (must re-run before merge) |
-| Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`); validation not verified locally |
+| Code quality | ✅ Clean — dedupes job-task mapping, honest deps array, contract now accurate |
+| Validation suite | ❌ **43 failures from branch staleness** — not this PR's code, but blocks merge |
+| Branch freshness | ❌ **42 commits behind develop** — must update before merge |
+| Mergeable state | ⚠️ GitHub reports `mergeable_state: clean`, but that is merge-ability, not test health |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions**
+**Approve the code — block the merge on the branch update.**
 
-The fix correctly addresses the root cause described in PP-1864 by reusing `calculateOrderChargeAdjustments` in `"add"` mode, and the add-mode logic provably handles word counts moving both above and below the minimum-charge threshold. The change is tightly scoped (2 files), removes dead code, and ships with meaningful wiring tests. All findings are **low severity**.
+The fix itself is correct, tightly scoped, reuses the right utility, and the two actionable findings are applied. But this branch cannot merge as-is.
 
-Before merging:
-1. **Re-run the validation suite** (`test` / `typecheck` / `lint` / `build`) on the PR branch — it was not run in this review.
-2. (Optional) Guard submit while the `PremiumChargeRate` query is unresolved (Issue 1), so the format-premium recalculation can't silently no-op on a fast submit.
-3. (Optional) Add direct unit tests for `calculateOrderChargeAdjustments` to lock in the actual pricing math (Tests note), and clarify the utility's add-mode contract for full-recompute callers (Issue 3).
-4. (Optional) Drop the leftover `api/jobTypes/enums` mock from the test (Issue 4).
+1. ⛔ **Merge/rebase develop into this branch and re-run the suite.** 42 commits behind; 43 tests red here, all green on develop. Doubly important because this PR reuses `calculateOrderChargeAdjustments` — a billing utility that may have changed in those 42 commits.
+2. ~~Guard submit while the `PremiumChargeRate` query is unresolved~~ (Issue 1) → ⏭️ **Deferred** — real, but the pattern is shared with `useAddNewJob`; fix both together.
+3. ~~Clarify the utility's add-mode contract~~ (Issue 3) → ✅ **Done** on `a8a585212`.
+4. ~~Drop the leftover `api/jobTypes/enums` mock~~ (Issue 4) → ✅ **Done** on `a8a585212`.
+5. **Partial-failure window** (Issue 2) → ⏭️ **Acknowledged**, no change; the suggested reorder does not fix it.
+
+**Post-merge follow-ups worth raising separately:**
+
+- **`masterReferencesCharge = []` silent no-op (Issue 1)** — guard both `ChangeWordCountModal` and `useAddNewJob`, and resolve `calculateFormatPremium`'s null-ambiguity ("not a premium format" vs "reference unavailable"). Covers the failed-query variant, not just the race.
+- **Direct unit tests for `calculateOrderChargeAdjustments`** — no dedicated test file exists; the pricing math this ticket is about is not asserted anywhere directly.
+- **Atomic order+job-task write (Issue 2)**, or at minimum defer the modal close until all writes resolve.
