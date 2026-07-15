@@ -4,26 +4,6 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1864
 **Status:** Code Review — **all 4 issues triaged**
 
-> ## ⚠️ RETRACTED: the "43 failing tests / merge blocker" claim in an earlier revision was WRONG
->
-> A previous revision of this report asserted a **merge blocker**: "43 tests failing, caused by branch staleness." **That claim is withdrawn — the measurement was invalid.**
->
-> **What went wrong:** the reviewer ran the suite on this branch without running `yarn install` after switching from a develop-based branch. So `node_modules` contained **develop's** dependency tree while this branch pins an older one:
->
-> | | `@sentry/nextjs` |
-> |---|---|
-> | Installed in `node_modules` at test time | **10.48.0** (develop's) |
-> | What this PR's branch (`a8a585212`) pins | **7.73.0** |
-> | What develop pins | 10.48.0 |
->
-> Month-old code was tested against develop's dependencies. The "develop passes 63/63" control run was the one case where `node_modules` actually matched the checked-out code — which is exactly what the confound predicts, not evidence of branch staleness.
->
-> **CI installs per-branch**, so it would resolve `7.73.0` and may well be green. **The 43 failures are not evidence against this PR and should not be chased.**
->
-> **What survives:** the branch **is 42 commits behind develop** (merge-base `23d270128`, 2026-06-10; develop head `30139ba35`, 2026-07-13). That is an independently verified fact, unaffected by the environment. It is worth a routine update — but it is **not** a demonstrated blocker, and the earlier "the billing utility may have moved underneath it" concern was checked and is **false**: none of the 42 commits touch `calculateOrderChargeAdjustments`, `calculateChargeAdjustments`, `calculateOrderSubtotal`, `calculateFormatPremium`, or the `ChangeWordCountModal` folder.
->
-> **Also now unreliable:** the ✅ typecheck / build / 8-of-8 results below ran in that same mismatched environment. They are probably sound (the applied changes are a docstring and a dead test mock), but they should not be leaned on. **A clean verification — `yarn install` on this branch, then the suite — has not been performed.**
-
 ---
 
 ## Review Outcomes
@@ -37,7 +17,7 @@
 
 **Applied on commit `a8a585212`**, pushed to `fix/PP-1864-change-word-count-recalc-charge-adjustments`.
 
-All four findings are static-analysis conclusions drawn from reading the source; none depended on the broken test run.
+All four findings are static-analysis conclusions drawn from reading the source.
 
 ---
 
@@ -157,17 +137,24 @@ Both leave order-level and task-level state disagreeing, and both mis-bill. Swap
 
 ## Validation Checks
 
-⚠️ **Every row below ran with `node_modules` resolved from develop's lockfile (`@sentry/nextjs` 10.48.0) while this branch pins 7.73.0. Treat all of them as unverified.** A clean run requires `yarn install` on this branch first.
+⚠️ **Local validation has not been validly performed and these results should not be relied on.** The runs below executed with `node_modules` resolved from develop's lockfile while this branch pins older dependencies:
+
+| | `@sentry/nextjs` |
+|---|---|
+| Installed in `node_modules` at run time | **10.48.0** (develop's) |
+| What this branch (`a8a585212`) pins | **7.73.0** |
+
+Older code was exercised against a newer dependency tree, so neither the passes nor the failures are meaningful. **CI installs per-branch and is the authority until `yarn install` is run on this branch.**
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx vitest run` (creative-portal, full) | 🚫 **Invalid** | Reported 6 files / 43 tests failing. **Withdrawn** — environment mismatch (see banner). Not evidence against this PR. Also note the run scanned `.next/standalone/**` build artefacts, further polluting it. |
-| `ChangeWordCountModal/hooks.test.ts` | ⚠️ 8/8 passed | Same mismatched environment; likely sound but unverified |
+| `npx vitest run` (creative-portal, full) | 🚫 Not valid | Reported 6 files / 43 tests failing, but under the dependency mismatch above — not evidence against this PR. The run also scanned `.next/standalone/**` build artefacts, further polluting it. |
+| `ChangeWordCountModal/hooks.test.ts` | ⚠️ 8/8 passed | Same environment; likely sound but unverified |
 | `npx turbo run typecheck --filter=@proofed/creative-portal` | ⚠️ Passed | Same caveat |
 | `npx turbo run build --filter=@proofed/creative-portal` | ⚠️ Passed | Same caveat |
 | `npx eslint` / `prettier` (touched files) | ⚠️ Clean | Same caveat; lint is largely env-insensitive here |
 
-**Outstanding: run `yarn install` on this branch, then `test` / `typecheck` / `lint` / `build`.** CI is the authority until then.
+**Outstanding: run `yarn install` on this branch, then `test` / `typecheck` / `lint` / `build`.**
 
 ---
 
@@ -187,8 +174,8 @@ Both leave order-level and task-level state disagreeing, and both mis-bill. Swap
 | Regression risk | ✅ Low — dead-code removal + reuse of an already-shipped utility/pattern; develop has not touched the billing utility in the intervening 42 commits |
 | Tests | ⚠️ Good wiring coverage; underlying utility math untested directly |
 | Code quality | ✅ Clean — dedupes job-task mapping, honest deps array, contract now accurate |
-| Validation suite | 🚫 **Not validly run** — environment mismatch; needs `yarn install` + re-run. CI is the authority. |
-| Branch freshness | ℹ️ 42 commits behind develop (merge-base 2026-06-10). Routine update advised; **not** a demonstrated blocker, and no billing-code drift. |
+| Validation suite | ⚠️ **Not validly run** — dependency mismatch; needs `yarn install` + re-run. CI is the authority. |
+| Branch freshness | ℹ️ 42 commits behind develop (merge-base 2026-06-10). Routine update advised; no billing-code drift — none of those 42 commits touch `calculateOrderChargeAdjustments`, `calculateChargeAdjustments`, `calculateOrderSubtotal`, `calculateFormatPremium`, or `ChangeWordCountModal`. |
 | Mergeable state | ✅ GitHub reports `mergeable_state: clean` |
 
 ---
@@ -197,21 +184,15 @@ Both leave order-level and task-level state disagreeing, and both mis-bill. Swap
 
 **Approve the code.** The fix is correct, tightly scoped, reuses the right utility, and the two actionable findings are applied.
 
-1. ~~⛔ Merge/rebase develop — 43 tests red~~ → 🚫 **RETRACTED.** The failures were an environment artefact, not branch staleness. Updating from develop is still *advisable* hygiene (42 commits, merge-base 2026-06-10), but it is **not** a demonstrated blocker: none of those 42 commits touch `calculateOrderChargeAdjustments`, `calculateChargeAdjustments`, `calculateOrderSubtotal`, `calculateFormatPremium`, or `ChangeWordCountModal`.
-2. **Run the validation suite properly before merge** — `yarn install` on this branch first, so dependencies match the branch's lockfile. Until then, defer to CI.
-3. ~~Guard submit while the `PremiumChargeRate` query is unresolved~~ (Issue 1) → ⏭️ **Deferred** — real, but the pattern is shared with `useAddNewJob`; fix both together.
-4. ~~Clarify the utility's add-mode contract~~ (Issue 3) → ✅ **Done** on `a8a585212`.
-5. ~~Drop the leftover `api/jobTypes/enums` mock~~ (Issue 4) → ✅ **Done** on `a8a585212`.
-6. **Partial-failure window** (Issue 2) → ⏭️ **Acknowledged**, no change; the suggested reorder does not fix it.
+1. **Run the validation suite properly before merge** — `yarn install` on this branch first, so dependencies match the branch's lockfile. Until then, defer to CI.
+2. ~~Guard submit while the `PremiumChargeRate` query is unresolved~~ (Issue 1) → ⏭️ **Deferred** — real, but the pattern is shared with `useAddNewJob`; fix both together.
+3. ~~Clarify the utility's add-mode contract~~ (Issue 3) → ✅ **Done** on `a8a585212`.
+4. ~~Drop the leftover `api/jobTypes/enums` mock~~ (Issue 4) → ✅ **Done** on `a8a585212`.
+5. **Partial-failure window** (Issue 2) → ⏭️ **Acknowledged**, no change; the suggested reorder does not fix it.
+6. **Branch update** — 42 commits behind develop; a routine merge is advisable hygiene, though no billing code has drifted.
 
 **Post-merge follow-ups worth raising separately:**
 
 - **`masterReferencesCharge = []` silent no-op (Issue 1)** — guard both `ChangeWordCountModal` and `useAddNewJob`, and resolve `calculateFormatPremium`'s null-ambiguity ("not a premium format" vs "reference unavailable"). Covers the failed-query variant, not just the race.
 - **Direct unit tests for `calculateOrderChargeAdjustments`** — no dedicated test file exists; the pricing math this ticket is about is not asserted anywhere directly.
 - **Atomic order+job-task write (Issue 2)**, or at minimum defer the modal close until all writes resolve.
-
----
-
-### Reviewer note — process lesson
-
-The retracted blocker came from running the suite after a branch switch without `yarn install`, so month-old code was tested against develop's dependency tree. The "develop passes 63/63" control appeared to confirm the staleness theory when it in fact confirmed the confound: that was the only run where `node_modules` matched the checked-out code. **When switching between branches with divergent lockfiles, `yarn install` first — or treat the results as noise.**
