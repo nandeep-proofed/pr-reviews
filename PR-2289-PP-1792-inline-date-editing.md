@@ -7,7 +7,7 @@
 **Size:** 22 files, +2893 / −195, 8 commits
 **Mergeable state (GitHub):** `clean` (was `dirty` at first review — reconciled with develop, see Issue 1)
 
-> **Update (2026-07-16):** Re-checked against the current branch head. **Issues 1, 2, 3, 4 and 5 are now resolved / not-valid** — see the ✅ notes on each. Only low-severity **7, 9** (and optional **6, 8**) remain. Locally re-verified: affected unit tests pass, `typecheck` 0 errors, `lint` 0 errors on changed files.
+> **Update (2026-07-16):** Re-checked against the current branch head. **Issues 1, 2, 3, 4 and 5 are resolved / not-valid**; **Issue 6 is valid-but-low (skip unless profiled)**. Only low-severity **7, 9** (and optional **8**) remain. Locally re-verified: affected unit tests pass, `typecheck` 0 errors, `lint` 0 errors on changed files.
 
 ---
 
@@ -46,7 +46,7 @@ The core design is sound and follows repo conventions well:
 
 ~~The main architectural tension is **timing and duplication with `develop`**.~~ **(Resolved — Issue 1.)** The branch merged `develop` and reconciled the return-time logic with PP-1642/PP-1644; GitHub now reports `clean`.
 
-A secondary concern is **per-row cost**: the deadline cell mounts a (disabled) order query observer, two mutation observers, and two `useInlineDateEdit` instances per order row (Issue 6).
+A secondary concern is **per-row cost** (Issue 6) — assessed as valid-but-low.
 
 ---
 
@@ -68,7 +68,7 @@ A secondary concern is **per-row cost**: the deadline cell mounts a (disabled) o
 
 **Re-assessment (verified 2026-07-16 — not valid):** Both cited changes are develop's already-merged PP-1642/PP-1644 baseline, not this PR:
 - **`services/orders/utils.ts`** — PP-1792's diff is a **comment-only change**; the `currentJobReturnTime || currentJobMaxReturnTime` display is develop's **PP-1644 Req 4.1** behaviour.
-- **`useUpdateJobReturn.ts`** — a **behaviour-preserving refactor** (Base+wrapper, unchanged public signature, same sidebar handlers). The sidebar's `updateReturnTime` still uses only `updateJobReturnTimes` and does **not** call `applyChainTimingsFromEditedJob` (that's only in the new inline path). The one other edit is `order.dueDateTime` → `order?.dueDateTime` null-safety (identical when `order` is defined).
+- **`useUpdateJobReturn.ts`** — a **behaviour-preserving refactor** (Base+wrapper, unchanged public signature, same sidebar handlers). The sidebar's `updateReturnTime` still uses only `updateJobReturnTimes` and does **not** call `applyChainTimingsFromEditedJob` (that's only in the new inline path). The one other edit is `order.dueDateTime` → `order?.dueDateTime` null-safety.
 
 Req 12.1's "existing sidebar flow unchanged" is upheld. **Residual (not a defect):** a quick sidebar date-edit smoke-test is worthwhile refactor hygiene.
 
@@ -78,22 +78,15 @@ Req 12.1's "existing sidebar flow unchanged" is upheld. **Residual (not a defect
 
 **Problem:** the handler had begun echoing `proofedUserId` on every PUT (risking an unintended re-assignment side effect on unrelated sidebar edits).
 
-**Resolution (verified 2026-07-16):** `putJob.ts` no longer references `proofedUserId`; `jobPutData` is limited to the intended fields. The unconditional forwarding was removed.
+**Resolution (verified 2026-07-16):** `putJob.ts` no longer references `proofedUserId`; `jobPutData` is limited to the intended fields.
 
 ### 4. Unhandled crash when the current job is not in the fetched job list (`currentJobIndex === -1`) — ✅ RESOLVED
 
-**[File: DeadlineCellContent/hooks.ts · OrderJobs/hooks/useUpdateJobReturn.ts]**
-
-**Function/Class:** useInlineDateEdit.handleApplyJobDueDate → useUpdateJobReturnBase.updateReturnTime
-
 **Severity:** medium
 
-**Problem:** `currentJobIndex = jobs.findIndex(j => j.id === orderData?.currentJobId)` is `-1` when `currentJobId` is null/0 or absent from `orderJobs`. The job-due-date editor still renders from the row's `currentJobDeadline` prop, so a user could open it and click Apply; `handleApplyJobDueDate` only guarded `!deadlineDate || !orderData?.dueDateTime`, then `updateReturnTime` read `jobs[-1]` → `currentJob.status` → `TypeError: Cannot read properties of undefined`. Confirmed reachable via a list/detail data inconsistency (row exposes a `currentJobDeadline` but the fetched `currentJobId` isn't in `orderJobs`); does not fire on consistent data.
+**Problem:** `currentJobIndex` is `-1` when `currentJobId` is null/0 or absent from `orderJobs`. The job-due-date editor still renders from the row's `currentJobDeadline` prop, so Apply could reach `updateReturnTime`, which read `jobs[-1].status` → `TypeError`. Reachable via a list/detail data inconsistency; does not fire on consistent data.
 
-**Resolution (commit `e917142e`, verified 2026-07-16):**
-- `updateReturnTime` (shared core) now bails when `jobs[selectedJobIndex]` is undefined, before reading `.status` — protects the sidebar and inline callers alike.
-- `handleApplyJobDueDate` early-returns when `currentJobIndex < 0` (added to the guard + deps), so the apply never starts and there's no loading flicker.
-- Added a unit test for the `selectedJobIndex === -1` no-op path (`useUpdateJobReturn.test.ts`); the suite passes (28 tests).
+**Resolution (commit `e917142e`, verified 2026-07-16):** `updateReturnTime` now bails when `jobs[selectedJobIndex]` is undefined (before reading `.status`) — protects sidebar + inline callers; `handleApplyJobDueDate` early-returns when `currentJobIndex < 0`; added a unit test for the `-1` no-op path (`useUpdateJobReturn.test.ts`, 28 tests passing).
 
 ### 5. `addJobWithTasks` mixture will be rejected at runtime (documented, not fixed) — ✅ RESOLVED
 
@@ -103,13 +96,23 @@ Req 12.1's "existing sidebar flow unchanged" is upheld. **Residual (not a defect
 
 **Resolution (verified 2026-07-16):** the `TODO(PP-1419)` is gone and the mixture now forwards `returnWindowsMinutes` + `maxReturnTime` (guarded on `insertedJobTiming` windows) for the upcoming job.
 
-### 6. Every dashboard row now mounts an order query + mutation observers
+### 6. Every dashboard row now mounts an order query + mutation observers — ⚠️ Valid but low (skip unless profiled)
+
+**[File: DeadlineCellContent/hooks.ts]**
+
+**Function/Class:** useInlineOrderData (called once per row via DeadlineCellContent)
 
 **Severity:** low
 
-**Problem:** for every rendered row the cell instantiates `useOrderByIdQuery` (disabled), `useOrderPutMutation`, `useJobMutation`, `useQueryClient`, `useZonedTime`, plus two `useInlineDateEdit` instances. Overhead, not a correctness bug.
+**Problem:** for every rendered order row `DeadlineCellContent` calls `useInlineOrderData` (disabled `useOrderByIdQuery` + `useOrderPutMutation` + `useJobMutation` + `useQueryClient` + `useZonedTime`) plus two `useInlineDateEdit` → `useUpdateJobReturnBase` trees. The OM table is **not virtualized** (`table.tsx` renders `rows.map(...)`), so this is materially heavier than the two old `DeadlineDisplay`s.
 
-**Fix:** Optional — lazily create the query/mutations only when a picker first opens, or memoise `InlineDeadlineEditor`. Not a blocker.
+**Assessment (verified 2026-07-16 — valid observation, low impact, skip unless profiled):**
+- The queries are **disabled — no network**; a disabled React Query observer only subscribes to the cache, and mutation observers are similarly lightweight. Real work happens only when a picker opens.
+- The set is **bounded**: the dashboard query is month-scoped, and rows render **progressively in batches** (`nextBatchSize`, `table.tsx`), not the whole set at once.
+- Group-header rows take `DeadlineCell`'s early non-editor branch, and finished orders mount only `useInlineOrderData` then `return null` (the two editors are skipped) — so those rows don't pay the full cost.
+- It's overhead, not a correctness bug; no profiling evidence of jank.
+
+**Status:** ⚠️ **Won't-fix for now (skip).** Optional cheap wins if a large month ever feels sluggish: (1) lift the finished-order check into the `DeadlineCell` wrapper so `useInlineOrderData` never mounts for finished rows; (2) lazily create the query + mutations on first picker-open instead of per-row.
 
 ### 7. Loading skeleton can stick if the post-mutation dashboard value is unchanged
 
@@ -171,6 +174,7 @@ Req 12.1's "existing sidebar flow unchanged" is upheld. **Residual (not a defect
 |---|---|
 | Correctness | ✅ The unguarded crash path (Issue 4) is fixed; core inline flow correct. Issues 2 & 3 resolved |
 | Regression risk | ✅ Low — Issues 1, 2, 3 resolved; sidebar flow is a behaviour-preserving refactor |
+| Performance | ⚠️ Low — per-row observer overhead (Issue 6), disabled/bounded; skip unless profiled |
 | Tests | ✅ New tests added with good path coverage; ⚠️ heavily mocked |
 | Code quality | ✅ Clean hook/UI split, good reuse, sensible `DeadlineWarningModal` consolidation |
 | Validation suite | ✅ affected tests / typecheck / lint green (build not run) |
@@ -185,7 +189,7 @@ Req 12.1's "existing sidebar flow unchanged" is upheld. **Residual (not a defect
 1. ~~**Blocker — resolve Issue 1.**~~ ✅ RESOLVED — reconciled with develop, `clean`.
 2. **Run the full validation suite** (`test` / `typecheck` / `lint` / `build`) before sign-off per CLAUDE.md. Affected tests / typecheck / lint are green here.
 3. ~~**Confirm OMS `proofedUserId` semantics (Issue 3).**~~ ✅ RESOLVED — no longer forwarded.
-4. ~~**Fix the `currentJobIndex === -1` guard (Issue 4).**~~ ✅ RESOLVED — guarded in `updateReturnTime` + `handleApplyJobDueDate`, with a test (commit `e917142e`).
+4. ~~**Fix the `currentJobIndex === -1` guard (Issue 4).**~~ ✅ RESOLVED — guarded + tested (commit `e917142e`).
 5. ~~**Decide on `addJobWithTasks` (Issue 5).**~~ ✅ RESOLVED — mixture now forwards the PP-1419 fields.
-6. ~~**Confirm the changed sidebar/dashboard behaviour (Issue 2).**~~ ✅ RE-ASSESSED as not-valid — behaviour-preserving refactor; develop's PP-1644 baseline. A sidebar smoke-test is still good hygiene.
-7. Address low-severity **9** (Live-status guard) and **7** (skeleton backstop) as small follow-ups; treat **6** & **8** as optional.
+6. ~~**Confirm the changed sidebar/dashboard behaviour (Issue 2).**~~ ✅ RE-ASSESSED as not-valid.
+7. Address low-severity **9** (Live-status guard) and **7** (skeleton backstop) as small follow-ups. **Issue 6** (per-row overhead) and **8** (runtime validation) are optional / skip unless a concrete need appears.
