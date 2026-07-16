@@ -7,7 +7,7 @@
 **Size:** 22 files, +2893 / −195, 8 commits
 **Mergeable state (GitHub):** `clean` (was `dirty` at first review — reconciled with develop, see Issue 1)
 
-> **Update (2026-07-16):** Re-checked against the current branch head (`d5e529f9f`). **Issues 1, 3 and 5 are now resolved** — see the ✅ notes on each. Issues 2, 4, 6, 7, 8, 9 still stand. Locally re-verified on the current branch: affected unit tests (126) pass, `typecheck` 0 errors, `lint` 0 errors on all changed files.
+> **Update (2026-07-16):** Re-checked against the current branch head (`d5e529f9f`). **Issues 1, 2, 3 and 5 are now resolved / not-valid** — see the ✅ notes on each. Issues 4, 6, 7, 8, 9 still stand. Locally re-verified on the current branch: affected unit tests (126) pass, `typecheck` 0 errors, `lint` 0 errors on all changed files.
 
 ---
 
@@ -20,18 +20,18 @@
 | 3 / 3.1 / 3.2 Icon colour matches date colour state (red when overdue) | `iconColor = isOverdue ? theme.colors.red : color`; `DeadlineDisplay` independently forces `red` when `remainingTime < 0`, so text and icon stay consistent | ✅ Addressed |
 | 4.1 / 4.2 Hovering icon turns it green (matches sidebar) | `&:hover svg, &:focus-visible svg { color: green1 }` | ✅ Addressed |
 | 5. Clicking icon opens calendar overlay | `Dropdown` + `DeadlineDatePicker` opened via trigger `onClick={handleOpen}` | ✅ Addressed |
-| 6.1 / 6.2 Overlay uses existing job-due-date / order-deadline flows | Reuses `DeadlineDatePicker` + extracted `useUpdateJobReturnBase` (job due date) and a new `applyOrderDeadline` mirroring the sidebar (order deadline) | ⚠️ Partial — reuses the components but the underlying validation was rewritten (see Issue 2) |
+| 6.1 / 6.2 Overlay uses existing job-due-date / order-deadline flows | Reuses `DeadlineDatePicker` + `useUpdateJobReturnBase` (a behaviour-preserving refactor of the sidebar hook) and a new `applyOrderDeadline` mirroring the sidebar | ✅ Addressed (sidebar validation preserved — see Issue 2) |
 | 7. User can submit updated date | `onApply={handleApply}` | ✅ Addressed |
 | 8.1 / 8.2 On success, dashboard shows updated date + refreshed styling/icon | `refetchDashboard()` + prop-diff `useEffect` clears the per-type loading skeleton | ✅ Addressed (see Issue 7 for a stuck-skeleton edge case) |
 | 9. Applies to both due date & deadline wherever displayed | Both editors rendered in the deadline column | ✅ Addressed |
 | 10 / 11. Not available for Completed/Cancelled; no icon, non-interactive | `if (FINISHED_ORDER_STATUSES.includes(orderStatus)) return null` | ✅ Addressed |
-| 12 / 12.1 Limited to exposing the existing flow; existing validation, permissions & date-update rules unchanged | The PR threads the PP-1419 Dynamic Return Time model through the shared Job PUT path, changing the **existing sidebar** update behaviour and the displayed Job Due Date | ⚠️ Partial → see Issue 2 |
+| 12 / 12.1 Limited to exposing the existing flow; existing validation, permissions & date-update rules unchanged | Existing sidebar flow is preserved (behaviour-preserving refactor); the displayed-Job-Due-Date change is develop's PP-1644 baseline, not this PR | ✅ Addressed — see Issue 2 re-assessment |
 
 **Scope beyond the ticket (flagged):**
 
 - `api/jobs/[jobId]/putJob.ts`, `api/jobs/types.ts` — new PP-1419 fields (`returnWindowsMinutes`, `maxReturnWindowsMinutes`, `maxReturnTime`) added to the Job PUT contract. (The unconditional `proofedUserId` forwarding flagged in Issue 3 has since been removed — see Issue 3.)
-- `services/orders/utils.ts` — `resolveCurrentJobDeadline` changes what the **Job Due Date** column shows for *every* unassigned order (returnTime → maxReturnTime), not only during inline edit.
-- `OrderJobs/utils.ts` — new `applyChainTimingsFromEditedJob` / `normalizeJobDurations` chain calculator.
+- `services/orders/utils.ts` — the returnTime→maxReturnTime display of the Job Due Date is **develop's PP-1644 Req 4.1 behaviour**; PP-1792's diff here is a comment only (see Issue 2).
+- `OrderJobs/utils.ts` — new `applyChainTimingsFromEditedJob` / `normalizeJobDurations` chain calculator (used by the new inline path).
 - The `DeadlineWarningModal` extraction folds in PP-1827's double-click guard for all three call sites (a genuine, reasonable refactor).
 
 ---
@@ -62,21 +62,26 @@ A secondary concern is **per-row cost**: the deadline cell went from two cheap `
 
 **Problem:** GitHub reported `mergeable_state: "dirty"`. The branch predated the Dynamic Return Time epic (PP-1642 merged 2026-06-09 via #2307, PP-1644 built on it), which reworked the exact same surfaces this PR touches: `useUpdateJobReturn` / `updateReturnTime`, `updateJobReturnTimes`, `OrderFromSearch.currentJobMaxReturnTime`, and the `JobPut` type.
 
-**Resolution (verified 2026-07-16):** The branch merged current `develop` (`d5e529f9f`) and reconciled the return-time logic across four follow-up commits — `dbe055500` "Merge conflicts resolve", `2b1c26cc4` "branch Job Due Date on current job assignment status", `b2d007204` "prefer currentJobMaxReturnTime for dashboard Job Due Date", `9408aa6f7` "display + edit currentJobMaxReturnTime when OMS supplies it". GitHub now reports **`mergeable_state: "clean"`**, and `useUpdateJobReturn.test.ts` (present on `develop` via PP-1642, absent at first review) is now on the branch and passing. The two chain-timing implementations are reconciled onto the merged model.
+**Resolution (verified 2026-07-16):** The branch merged current `develop` (`d5e529f9f`) and reconciled the return-time logic across four follow-up commits — `dbe055500` "Merge conflicts resolve", `2b1c26cc4` "branch Job Due Date on current job assignment status", `b2d007204` "prefer currentJobMaxReturnTime for dashboard Job Due Date", `9408aa6f7` "display + edit currentJobMaxReturnTime when OMS supplies it". GitHub now reports **`mergeable_state: "clean"`**, and `useUpdateJobReturn.test.ts` (present on `develop` via PP-1642, absent at first review) is now on the branch and passing.
 
-### 2. Existing sidebar date-update behaviour changes, contrary to req 12.1
+### 2. Existing sidebar date-update behaviour changes, contrary to req 12.1 — ✅ RESOLVED / not valid
 
-**[File: apps/creative-portal/components/organisms/sidebars/contents/OrderManagment/partials/OrderJobs/hooks/useUpdateJobReturn.ts]**
+**[File: apps/creative-portal/.../OrderJobs/hooks/useUpdateJobReturn.ts · apps/creative-portal/services/orders/utils.ts]**
 
-**Function/Class:** useUpdateJobReturnBase / updateReturnTime
+**Function/Class:** useUpdateJobReturnBase / updateReturnTime · resolveCurrentJobDeadline
 
 **Severity:** medium
 
-**Problem:** The ticket states the change is "limited to exposing the existing date update flow inline" and "Existing validation, permissions, and date update rules must remain unchanged" (req 12 / 12.1). In practice `updateReturnTime` now first attempts `applyChainTimingsFromEditedJob`; for "new" orders it validates the `maxReturnTime` sequence (not `returnTime`), and the sidebar's context `updateJobs` forwards the *whole* recomputed job. Separately, `resolveCurrentJobDeadline` changes the displayed Job Due Date (returnTime → maxReturnTime) for every unassigned order on the dashboard, independent of any inline edit.
+**Problem (as originally raised):** The ticket states the change is "limited to exposing the existing date update flow inline" and "existing validation, permissions, and date update rules must remain unchanged" (req 12 / 12.1). The review flagged that `updateReturnTime` now attempts `applyChainTimingsFromEditedJob` / validates the `maxReturnTime` sequence, and that `resolveCurrentJobDeadline` changes the displayed Job Due Date (returnTime → maxReturnTime) for every unassigned order.
 
-**Impact:** The existing sidebar deadline-change flow and the at-rest dashboard Job Due Date column behave differently after this PR. This may be intentional/necessary given PP-1419 — and after the Issue 1 reconcile the branch now converges on the same Dynamic Return Time model that `develop` already ships — but it still exceeds the ticket's stated "unchanged" guarantee and should be explicitly QA'd.
+**Re-assessment (verified 2026-07-16 against the current reconciled branch — not valid):** Both cited behaviour changes are develop's already-merged PP-1642/PP-1644 baseline, not introduced by this PR:
 
-**Fix:** Confirm with the ticket owner that the behavioural change to the existing sidebar flow and the displayed Job Due Date is intended, and add it to the manual test plan (sidebar job-due-date change; dashboard Job Due Date value for Offered/In Queue/On Hold orders) for both new-model and legacy (pre-PP-1419) orders.
+- **`services/orders/utils.ts`** — PP-1792's diff vs develop is a **comment-only change**. The displayed-Job-Due-Date fallback `currentJobReturnTime || currentJobMaxReturnTime` is develop's behaviour, labelled **PP-1644 Req 4.1** in the code. Not this PR.
+- **`useUpdateJobReturn.ts`** — the change is a **behaviour-preserving refactor**: `useUpdateJobReturn` is split into a handlers-as-params `useUpdateJobReturnBase` core + a thin wrapper whose **public signature is unchanged** and which passes the **same** sidebar context handlers (`setDeadlineModalProps`, `showDeadlineWarningModal`, `updateJobs`). The sidebar's `updateReturnTime` still imports/uses only `updateJobReturnTimes` (legacy shift) and does **not** call `applyChainTimingsFromEditedJob` — that chain calculator is used **only in the new inline dashboard path** (`DeadlineCellContent`), never the sidebar flow. The one other edit is `order.dueDateTime` → `order?.dueDateTime` null-safety, which is identical when `order` is defined (always true in the sidebar).
+
+The original review was written against the pre-reconcile (`dirty`) branch, where PP-1792 had independent chain-timing wiring. After merging develop + the reconcile commits the branch converged on develop's model, so req 12.1's "existing sidebar flow unchanged" is **upheld**.
+
+**Residual (not a defect):** because a shared hook was refactored, a quick QA smoke-test of the sidebar date-edit is worthwhile refactor hygiene.
 
 ### 3. `putJob.ts` now forwards `proofedUserId` on every job PUT — ✅ RESOLVED
 
@@ -86,9 +91,9 @@ A secondary concern is **per-row cost**: the deadline cell went from two cheap `
 
 **Severity:** medium
 
-**Problem:** The handler had begun sending `proofedUserId` to OMS whenever the request body carried one (`if (body.proofedUserId) { jobPutData.proofedUserId = body.proofedUserId; }`). Because the sidebar's `updateJobs` posts the full `Job` object, existing non-date PUT flows would also echo `proofedUserId` — a field they did not send before — risking an unintended (re)assignment side effect if OMS treats it as such.
+**Problem:** The handler had begun sending `proofedUserId` to OMS whenever the request body carried one. Because the sidebar's `updateJobs` posts the full `Job` object, existing non-date PUT flows would also echo `proofedUserId` — risking an unintended (re)assignment side effect if OMS treats it as such.
 
-**Resolution (verified 2026-07-16):** `putJob.ts` no longer references `proofedUserId` — `jobPutData` is now limited to the intended fields (`maxReturnTime`, `returnWindowsMinutes`, etc.). The unconditional forwarding was removed from the shared route handler, so unrelated sidebar edits no longer echo `proofedUserId`.
+**Resolution (verified 2026-07-16):** `putJob.ts` no longer references `proofedUserId` — `jobPutData` is now limited to the intended fields (`maxReturnTime`, `returnWindowsMinutes`, etc.). The unconditional forwarding was removed from the shared route handler.
 
 ### 4. Unhandled crash when the current job is not in the fetched job list (`currentJobIndex === -1`)
 
@@ -102,7 +107,7 @@ A secondary concern is **per-row cost**: the deadline cell went from two cheap `
 
 **Impact:** A `TypeError: Cannot read properties of undefined (reading 'status')` inside the render tree of the affected row on backend data inconsistency (currentJobId missing from `orderJobs`). No test covers `currentJobIndex === -1`.
 
-**Status (2026-07-16):** ❌ **Still open** — no `currentJobIndex < 0` / `selectedJobIndex < 0` guard has been added; `handleApplyJobDueDate` and `updateReturnTime` are unchanged on this point.
+**Status (2026-07-16):** ❌ **Still open** — no `currentJobIndex < 0` / `selectedJobIndex < 0` guard has been added.
 
 **Fix:** Guard the apply path, e.g. `if (!deadlineDate || !orderData?.dueDateTime || currentJobIndex < 0) return;` (and/or bail in `updateReturnTime` when `selectedJobIndex < 0`). Add a unit test for the `-1` case.
 
@@ -116,7 +121,7 @@ A secondary concern is **per-row cost**: the deadline cell went from two cheap `
 
 **Problem:** The PR had added a `TODO(PP-1419)` comment acknowledging that the mixture calls `updateJob` directly with a payload lacking the now-required `returnWindowsMinutes` / `maxReturnWindowsMinutes` / `maxReturnTime`, so the `upcomingJob` PUT would be rejected at OMS.
 
-**Resolution (verified 2026-07-16):** The `TODO(PP-1419)` is gone and the mixture now forwards the PP-1419 timing fields for the upcoming job — it guards on `insertedJobTiming?.maxReturnWindowsMinutes`/`returnWindowsMinutes`, derives the window, and sends `returnWindowsMinutes` + `maxReturnTime` on the PUT. The known "will be rejected at runtime" path is closed.
+**Resolution (verified 2026-07-16):** The `TODO(PP-1419)` is gone and the mixture now forwards the PP-1419 timing fields for the upcoming job — it guards on `insertedJobTiming?.maxReturnWindowsMinutes`/`returnWindowsMinutes`, derives the window, and sends `returnWindowsMinutes` + `maxReturnTime` on the PUT.
 
 ### 6. Every dashboard row now mounts an order query + mutation observers
 
@@ -174,7 +179,7 @@ A secondary concern is **per-row cost**: the deadline cell went from two cheap `
 
 | Check | Result | Notes |
 |---|---|---|
-| Affected unit tests (creative-portal) | ✅ | **126/126 pass** on the current branch (DeadlineCellContent + hooks, DeadlineCell, JobReturnTimesTray, tableColumns, OrderJobs utils) — re-run 2026-07-16 |
+| Affected unit tests (creative-portal) | ✅ | **126/126 pass** on the current branch — re-run 2026-07-16 |
 | `turbo run typecheck` (creative-portal) | ✅ | 0 errors (current branch) |
 | `lint` (all 22 changed files) | ✅ | 0 errors (current branch) |
 | `turbo run build` | ⏭️ Not run | — |
@@ -196,8 +201,8 @@ Post-rebase note (now satisfied): `useUpdateJobReturn.test.ts` — present on `d
 
 | Aspect | Status |
 |---|---|
-| Correctness | ⚠️ One unguarded crash path remains (Issue 4); core inline flow otherwise correct. Issue 3 (proofedUserId) resolved |
-| Regression risk | ⚠️ Medium → reduced: Issue 1 (develop overlap) and Issue 3 (proofedUserId forwarding) resolved; the sidebar/dashboard behaviour change (Issue 2) still needs QA |
+| Correctness | ⚠️ One unguarded crash path remains (Issue 4); core inline flow otherwise correct. Issues 2 & 3 resolved |
+| Regression risk | ✅ Low → Issue 1 (develop overlap), Issue 2 (sidebar refactor is behaviour-preserving) and Issue 3 (proofedUserId) all resolved |
 | Tests | ✅ New tests added with good path coverage; ⚠️ heavily mocked; one gap (Issue 4) |
 | Code quality | ✅ Clean hook/UI split, good reuse, sensible `DeadlineWarningModal` consolidation |
 | Validation suite | ✅ affected tests / typecheck / lint green on current branch (build not run) |
@@ -207,12 +212,12 @@ Post-rebase note (now satisfied): `useUpdateJobReturn.test.ts` — present on `d
 
 ## Recommendation
 
-**Request changes** — down to a short list; the blocker is cleared.
+**Request changes** — down to a very short list; the blocker and most mediums are cleared.
 
 1. ~~**Blocker — resolve Issue 1 first.**~~ ✅ **RESOLVED** — branch reconciled with merged PP-1642/PP-1644, `mergeable_state: clean`, `useUpdateJobReturn.test.ts` present and passing.
 2. **Run the full validation suite** (`test` / `typecheck` / `lint` / `build`) on the reconciled branch. Affected tests / typecheck / lint are green here; the full `turbo run test` + `build` should still be run before sign-off per CLAUDE.md.
 3. ~~**Confirm OMS semantics for `proofedUserId` on PUT** (Issue 3).~~ ✅ **RESOLVED** — no longer forwarded from `putJob.ts`.
 4. **Fix the `currentJobIndex === -1` guard (Issue 4)** and add a test — the one remaining code defect.
 5. ~~**Decide on `addJobWithTasks` (Issue 5).**~~ ✅ **RESOLVED** — mixture now forwards the PP-1419 fields.
-6. **Confirm the changed sidebar/dashboard behaviour (Issue 2)** with the ticket owner and add it to the manual test plan for legacy + new-model orders.
+6. ~~**Confirm the changed sidebar/dashboard behaviour (Issue 2)** with the ticket owner.~~ ✅ **RE-ASSESSED as not-valid** — the sidebar hook change is a behaviour-preserving refactor and the displayed-Job-Due-Date change is develop's PP-1644 baseline. A quick sidebar date-edit smoke-test is still good hygiene.
 7. Address low-severity items 9 (Live-status guard) and 7 (skeleton backstop) as small follow-ups; treat 6 & 8 as optional.
