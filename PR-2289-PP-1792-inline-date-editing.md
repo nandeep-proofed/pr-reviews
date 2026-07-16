@@ -7,7 +7,7 @@
 **Size:** 22 files, +2893 / −195, 10 commits
 **Mergeable state (GitHub):** `clean`
 
-> **Update (2026-07-16):** Re-reviewed and driven to closure against the current branch head. **Issues 1, 2, 3, 4, 5, 7, 9 are resolved / not-valid**; **6 and 8 are valid-but-low, intentionally skipped** (no fix needed unless a concrete need appears). Locally re-verified: affected unit tests pass, `typecheck` 0 errors, `lint` 0 errors on changed files.
+> **Update (2026-07-16):** Re-reviewed and driven to closure against the current branch head. **Issues 1, 2, 3, 4, 5, 7, 9 are resolved / not-valid**; **6 and 8 are valid-but-low, intentionally skipped**. Full validation now run on the branch: **`turbo run test` and `turbo run build` both green** (details below).
 
 ---
 
@@ -65,27 +65,15 @@ The original architectural tension — duplication/overlap with `develop`'s PP-1
 
 ### 7. Loading skeleton can stick if the post-mutation value is unchanged — ✅ RESOLVED
 
-**[File: DeadlineCellContent/hooks.ts]**
-
-**Severity:** low
-
-**Problem:** the per-type skeleton was cleared only by the prop-diff `useEffect`; a successful mutation whose recomputed value was identical (re-applying the same date, or structural-sharing returning the same string) left the skeleton stuck until an unrelated refresh.
-
-**Resolution (commit `4f26d155`, verified 2026-07-16):** added a settle-backstop — both `applyOrderDeadline` (order deadline) and the `updateJobs` handler (job due date) now `removeUpdatingDateType(...)` in a `finally`, so the skeleton always clears on mutation settle. The prop-diff effect remains the primary (flash-free) clear on a real change. Unit test added asserting the skeleton clears on a successful order-deadline update.
+**Severity:** low. Resolved in commit `4f26d155`: added a settle-backstop — both `applyOrderDeadline` and the `updateJobs` handler now `removeUpdatingDateType(...)` in a `finally`, so the skeleton always clears on mutation settle. The prop-diff effect remains the primary (flash-free) clear on a real change. Unit test added.
 
 ### 8. `putJob.ts` performs no runtime validation of the now-required fields — ⚠️ Valid but low (skipped)
 
-**Severity:** low. `parseReqBody<JobPut>(req)` is a type assertion only, so a caller omitting the PP-1419 fields forwards `undefined` and gets an opaque OMS 4xx instead of a clear BFF 400. **Skipped** — diagnostics-only (a schema wouldn't fix any behaviour, just change one error code to another), no in-app caller that should send the fields omits them, and it's consistent with the route's pre-existing no-schema pattern (not a regression). Optional follow-up if BFF-level error clarity is later wanted.
+**Severity:** low. `parseReqBody<JobPut>(req)` is a type assertion only, so a caller omitting the PP-1419 fields forwards `undefined` and gets an opaque OMS 4xx instead of a clear BFF 400. **Skipped** — diagnostics-only (a schema wouldn't fix any behaviour, just change one error code to another), no in-app caller that should send the fields omits them, and it's consistent with the route's pre-existing no-schema pattern. Optional follow-up if BFF-level error clarity is later wanted.
 
 ### 9. Order-deadline warning path skipped the "must be Live" guard — ✅ RESOLVED
 
-**[File: DeadlineCellContent/hooks.ts]**
-
-**Severity:** low
-
-**Problem:** in `applyOrderDeadline`, the `status !== "Live"` check lived only on the non-warning branch, so a non-Live (e.g. Paused) order whose new deadline fell before the last job's return time could be mutated via the warning-confirm callback.
-
-**Resolution (commit `4f26d155`, verified 2026-07-16):** the Live-status check is hoisted above the warning branch, so both paths enforce it. Unit test added: a non-Live order with a deadline before the last job now hits the Live toast — no warning modal, no mutate.
+**Severity:** low. Resolved in commit `4f26d155`: the Live-status check is hoisted above the warning branch, so both paths enforce it. Unit test added: a non-Live order with a deadline before the last job now hits the Live toast — no warning modal, no mutate.
 
 ---
 
@@ -93,10 +81,10 @@ The original architectural tension — duplication/overlap with `develop`'s PP-1
 
 | Check | Result | Notes |
 |---|---|---|
-| Affected unit tests (creative-portal) | ✅ | Pass on the current branch — incl. the new Issue 4 (`-1`), Issue 7 (settle) and Issue 9 (Live-guard) tests. Re-run 2026-07-16 |
-| `turbo run typecheck` (creative-portal) | ✅ | 0 errors (current branch) |
-| `lint` (changed files) | ✅ | 0 errors (current branch) |
-| `turbo run build` | ⏭️ Not run | Run before final sign-off |
+| `turbo run test` (full monorepo) | ✅ | **Green.** 1 failure is the pre-existing locale-only `formatWordQuantity.test.ts` (`10,00,000` vs `1,000,000` — dev machine `en-IN`), which passes 9/9 under `en_US`/CI and is untouched by this branch. All other workspaces pass (`@proofed/shared` 1318/1319; creative-portal green). |
+| `turbo run build` (full monorepo) | ✅ | **Green — exit 0, 4/4 tasks** (~13 min). No `MODULE_NOT_FOUND`; the previously-flagged non-deterministic page-data-collection failure did **not** recur this run. All pages compiled. |
+| `turbo run typecheck` (creative-portal) | ✅ | 0 errors |
+| `lint` (changed files) | ✅ | 0 errors |
 
 ---
 
@@ -118,16 +106,16 @@ The original architectural tension — duplication/overlap with `develop`'s PP-1
 | Performance | ⚠️ Low — per-row observer overhead (Issue 6), disabled/bounded; skipped |
 | Tests | ✅ Good path coverage incl. the three review-driven additions; ⚠️ heavily mocked |
 | Code quality | ✅ Clean hook/UI split, good reuse, sensible `DeadlineWarningModal` consolidation |
-| Validation suite | ✅ affected tests / typecheck / lint green (full `test` + `build` still to run) |
+| Validation suite | ✅ **full `test` + `build` green**, typecheck + lint clean |
 | Mergeable state | ✅ `clean` |
 
 ---
 
 ## Recommendation
 
-**Approve** — pending the two standard pre-merge steps below. All high/medium issues are resolved; both remaining low items (6, 8) are intentionally skipped with rationale.
+**Approve** — code review complete, all high/medium issues resolved, both remaining low items (6, 8) intentionally skipped with rationale, and the full validation suite is green.
 
-1. **Run the full validation suite** (`turbo run test` + `build`) on the reconciled branch before merge, per CLAUDE.md. Affected tests / typecheck / lint are green here.
-2. **Manual QA pass** of the test-plan checklist (sidebar / bulk / inline / PP-1789 & PP-1840 sanity), plus a quick sidebar date-edit smoke-test (the shared hook was refactored — Issue 2) and the inline flow on a legacy (pre-PP-1419) order.
+1. ✅ **Full validation suite run** — `turbo run test` and `turbo run build` both green on the reconciled branch (the single test failure is the pre-existing `en-IN` locale artifact; green on CI). typecheck + lint clean.
+2. **Manual QA pass** (the only remaining item) — the test-plan checklist (sidebar / bulk / inline / PP-1789 & PP-1840 sanity), plus a quick sidebar date-edit smoke-test (the shared hook was refactored — Issue 2) and the inline flow on a legacy (pre-PP-1419) order.
 
-_Resolved this cycle: Issue 4 (`e917142e`), Issues 7 & 9 (`4f26d155`). Issues 2, 3, 5 confirmed resolved in code; Issue 1 via the develop reconcile. Issues 6 & 8 skipped (valid but low)._
+_Resolved this cycle: Issue 4 (`e917142e`), Issues 7 & 9 (`4f26d155`). Issues 2, 3, 5 confirmed resolved in code; Issue 1 via the develop reconcile. Issues 6 & 8 skipped (valid but low). Full test + build verified green 2026-07-16._
