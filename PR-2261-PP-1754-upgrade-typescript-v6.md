@@ -2,9 +2,11 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2261
 **Jira:** https://proofed.atlassian.net/browse/PP-1754
-**Status:** In Progress
+**Status:** Code Review
+**Head SHA reviewed:** `e4460091f` (includes a fresh merge of `develop` → branch + the file-type build fix)
+**Scope:** 103 files, +2,077 / −1,892, 49 commits
 
-> **Update (2026-04-20):** Sentry 7 → 10 upgrade has been reverted on this branch (commits `05c364a1a`, `7e5cd7c63`). `@sentry/nextjs` and `@sentry/types` are back at `7.73.0`. All Sentry-related review items below are retained for history but marked **[STALE — Sentry reverted]** where they no longer apply.
+> **Update (`e4460091f`):** The build blocker (Issue 1) has been **fixed** — `packages/shared` file-type pinned to `19.6.0`; `npx turbo run build` now passes **4/4 workspaces**. Issues 2 (Sentry `transpileClientSDK`) and 3 (Storybook alpha) are **intentionally deferred** to separate tickets per team decision — not blockers for this PR. See the updated Validation Checks, Summary, and Recommendation.
 
 ---
 
@@ -12,129 +14,174 @@
 
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
-| Upgrade TypeScript | 5.3.3 → 6.0.2 across all workspaces, no `ignoreDeprecations` escape hatch | ✅ Addressed |
-| Upgrade Turborepo | 2.3.3 → 2.9.6 | ✅ Addressed |
-| Upgrade Playwright | 1.45.1 → 1.59.1 | ✅ Addressed |
-| Resolve `@types/node` mismatch | Set `types: ["node"]` in base tsconfig, explicit per-workspace `types` | ✅ Addressed |
-| Sentry config: disable client SDK transpilation | **[STALE — Sentry reverted]** Sentry remains on v7; `transpileClientSDK: true` kept as the v7 default | ⚠️ N/A |
-| Storybook alignment (remove alpha, align versions) | Not addressed in this PR | ❌ Missing |
-| All packages must build and test successfully | PR description says typecheck/build/test all pass | ✅ Addressed |
+| 1. Upgrade Turborepo, Playwright, TypeScript to latest compatible | Turbo `2.3.3 → 2.9.6`, Playwright `1.45.1 → 1.59.1`, TypeScript `5.3.3 → 6.0.2` across all workspaces | ✅ Addressed |
+| 2. Storybook: remove alpha in creative portal + align versions across portals | creative-portal still pins `@storybook/* ^7.0.0-alpha.48`; storybook app on `^7.6.17` — **intentionally deferred to a separate ticket** | ⏸️ Deferred (by decision) |
+| 3. Sentry: disable unnecessary client SDK transpilation | `packages/shared/scripts/nextConfig.js:57` still `transpileClientSDK: true` — **intentionally deferred** (note: PR description should be corrected, it claims `false`) | ⏸️ Deferred (by decision) |
+| 4. Resolve `@types/node` version mismatch across packages | Both apps pin `@types/node: ^20` (was `18.7.6` in creative) | ✅ Addressed |
+| 5. All packages must build and test successfully | Build now **passes 4/4** after the file-type fix (`e4460091f`); shared has 1 locale-driven test failure (env, not code) | ✅ Addressed (post-fix) |
 
-**Scope beyond Jira ticket:**
-- ~~Sentry 7 → 10 upgrade (major, with OpenTelemetry integration)~~ **[REVERTED]** — kept on v7
-- axios 0.27 → 1
-- date-fns 2 → 4 + date-fns-tz v3
-- iron-session 6 → 8
-- swiper 8 → 11 (3 major versions)
-- react-toastify 9 → 10
-- framer-motion → v12
-- recharts 2 → 3
-- husky 8 → 9
-- stripe 14 → 22
-- `moduleResolution: "node"` → `"bundler"` migration
-
-> Many of these are justified — `moduleResolution: "bundler"` requires packages with proper `exports` fields, forcing swiper and react-toastify upgrades. However, the scope is significantly larger than the Jira ticket describes. This should be documented on the ticket.
+**Scope note:** The PR is otherwise well-contained to tooling/config/type changes. It does pull in functional package upgrades (swiper 8→11, react-toastify 9→10, **iron-session 6→8**), a file-type rework, and a date-fns/date-fns-tz major bump — all justified by the bundler-resolution change but they expand the blast radius and require manual QA.
 
 ---
 
 ## Architecture Analysis
 
-This PR makes a foundational change: migrating `moduleResolution` from `"node"` to `"bundler"`. This is the modern default for bundled apps and respects `package.json` `exports` fields — which cascades into requiring several library upgrades (swiper, react-toastify) whose old versions lacked proper `exports.types` conditions.
+The core change is sound and well-reasoned: `moduleResolution: "node" → "bundler"` (the modern Next.js default), `baseUrl` removed in favour of explicit `paths`, explicit `types` arrays, and `target ES2015 → ES2018`. The migrations are mechanical and consistent:
 
-The approach is sound:
-- **tsconfig changes** follow the `ts5to6` migration tool's recommendations (`baseUrl` removal, explicit `paths`, explicit `types` arrays)
-- **Library migrations** are consistent across all workspaces (date-fns-tz renames, iron-session API migration, Sentry v10 functional integration API)
-- **Code fixes** are minimal and targeted (import path corrections, type assertion fixes for stricter inference)
+- **react-toastify 9→10** (`Toast` atoms/molecules, wysiwyg Toast): `toastify.TYPE.*` enums → string literals (`"success"`, `"error"`, …) and `toast.POSITION.BOTTOM_LEFT → "bottom-left"`. Correct for v10's API. ✅
+- **swiper 8→11** (`OrderJobs`): `Mousewheel` moved from `"swiper"` → `"swiper/modules"`. Correct for v11. ✅ (needs visual QA — 3 majors.)
+- **file-type rework** (`processWorkItemContentWithMetadata`): `fileTypeFromFile(path)` → header-only read (`openSync`/`readSync` first 4100 bytes) + `fileTypeFromBuffer`. The header-only approach is actually a memory improvement over the whole-file read described in the PR body. ✅ logic — but see Issue 1 for the packaging fallout.
+- **iron-session 6→8**: full API migration (`withIronSessionApiRoute`/`withIronSessionSsr` → `getIronSession`); see Issue 5 and **Appendix A** for the per-file breakdown and deploy-time verifications.
+- **tsconfig `paths`** migration is complete (typecheck passes across all 5 workspaces, proving every alias import resolves).
+- **husky 8→9** (`7d9fd501b`): `prepare: "husky install"` → `"husky"`, and `.husky/pre-commit` drops the now-deprecated v8 boilerplate (`#!/usr/bin/env sh` + `. "$(dirname -- "$0")/_/husky.sh"`), leaving just `yarn lint-staged`. Correct for v9 — the sourcing line is deprecated in v9 and removed in v10; the hook still runs lint-staged. ✅
 
-The highest-risk changes are swiper 8→11 (visual/behavioral) and the `moduleResolution` switch (affects all import resolution). ~~Sentry 7→10~~ **[REVERTED]** — no longer a risk factor.
+The bundler-resolution change is the right call but has a sharp edge: it now resolves dependencies to their raw ESM `source` entry, which surfaces un-transpiled modern syntax to Next's webpack — exactly what broke the customer-portal build (Issue 1, now fixed).
 
 ---
 
 ## Issues Found
 
-### 1. `readFileSync` for MIME detection loads entire file into memory
+### 1. customer-portal production build fails — file-type `v`-flag regex ✅ FIXED (`e4460091f`)
 
-**[File: packages/shared/utils/files/processWorkItemContentWithMetadata.ts]**
-**Function/Class:** processWorkItemContentWithMetadata (streaming path, line 137)
-**Severity:** medium
-**Status:** ✅ Resolved — replaced `readFileSync` with `openSync`/`readSync` reading only first 4100 bytes
-**Problem:** After streaming a file to disk via `Base64DecodeStream`, the code reads the entire file back into memory with `readFileSync(tempFilePath)` just to detect the MIME type. The previous `fileTypeFromFile` was streaming-based and only read the file header. For large files (100MB+ PDFs or ZIPs), this causes unnecessary memory pressure.
-**Impact:** Potential OOM on large file uploads in the streaming code path. The base64 string path (line 147) doesn't have this issue since the buffer is already in memory.
-**Fix:** Read only the first 4100 bytes — that's all `file-type` needs for magic number detection:
+**[File: packages/shared/package.json]**
 
-```typescript
-import { openSync, readSync, closeSync } from "fs";
+**Function/Class:** `file-type` dependency (`^22.0.1`) consumed by `packages/shared/utils/files/processWorkItemContentWithMetadata.ts`
 
-const fd = openSync(tempFilePath, "r");
-const header = Buffer.alloc(4100);
-readSync(fd, header, 0, 4100, 0);
-closeSync(fd);
-const ft = await fileTypeFromBuffer(header);
+**Severity:** high — **resolved**
+
+**Resolution:** Pinned `packages/shared` file-type `^22.0.1 → 19.6.0` in commit `e4460091f`. `npx turbo run build` now passes **4/4 workspaces** (customer-portal + creative-portal both green). The sole consumer uses only `fileTypeFromBuffer`, which is identical across 19.x/22.x, so no functionality is lost; the version split (Issue 4) is also resolved. Original analysis retained below for context.
+
+**Problem:** `npx turbo run build` failed on `@proofed/customer-portal`:
+
+```
+../../packages/shared/node_modules/file-type/source/index.js
+Module parse failed: Invalid regular expression flag (1171:8)
+> if (/^\d+$/v.test(version) && version >= 1000 && version <= 1050) {
+Import trace: processWorkItemContentWithMetadata.ts → fileUploadStream.ts
+            → pages/api/orders/createOrder/stream.ts
 ```
 
-### 2. `@types/react-datepicker` version mismatch with react-datepicker v9
+`packages/shared` pinned `file-type: ^22.0.1` (resolves to 22.0.1), whose source uses the ES2024 `v` (unicodeSets) regex flag. Under the new `moduleResolution: bundler`, the import resolves to file-type's raw ESM `source/index.js`, which Next's webpack/acorn parser cannot handle. creative-portal builds fine; customer-portal pulls this shared code path through an API route and failed.
 
-**[File: apps/customer-portal/package.json]**
-**Function/Class:** N/A (package.json)
-**Severity:** medium
-**Status:** ✅ Resolved — removed `@types/react-datepicker` from customer-portal devDependencies
-**Problem:** `@types/react-datepicker` is at `^6.0.0` but `react-datepicker` was bumped to `^9.1.0`. Starting from v7, react-datepicker bundles its own TypeScript types. The stale `@types` package may provide conflicting type definitions.
-**Impact:** Could cause confusing type errors or mask API changes in react-datepicker v9.
-**Fix:** Remove `@types/react-datepicker` from devDependencies — react-datepicker v9 ships its own types.
+**Impact:** Was a hard blocker — customer-portal could not be built/deployed. This was the PR's own change (file-type `^22.0.1` added in commit `02be61c37`, "Address PR review side-effects items"), not a side effect of the develop merge.
 
-### 3. Empty string fallback for nullable Google Picker file name
+**Fix (applied):** Aligned shared's file-type to the same major the customer-portal already pins (`19.6.0`) — file-type 19.x does **not** use the `v` flag and resolves cleanly. This also removed the version split (Issue 4):
 
-**[File: apps/customer-portal/components/organisms/OrderCreation/index.tsx]**
-**Function/Class:** OrderCreation component
-**Severity:** low
-**Status:** ✅ Resolved — changed fallback to `"Untitled"`
-**Problem:** `(file.name ?? "").substring(...)` uses `""` as fallback when `file.name` is undefined (google.picker v0.0.52 made `name` nullable). This could create a document with an empty `title`.
-**Impact:** If a Google Picker document has no `name`, the file would be created with an empty title.
-**Fix:** Consider using a fallback like `"Untitled"` instead of `""`.
+```jsonc
+// packages/shared/package.json
+"file-type": "19.6.0",   // was "^22.0.1"
+```
 
-### 4. Fragile `as` casts in recharts tick props
+(Alternative if 22.x had been required: add file-type to `transpilePackages` in customer-portal's next config so webpack down-levels the `v` flag — heavier and would leave the version split in place.)
 
-**[File: apps/customer-portal/components/pages/reports/usage/partials/UsageChart/index.tsx]**
-**Function/Class:** UsageChart
-**Severity:** low
-**Status:** ✅ Resolved — replaced casts with recharts' exported `YAxisTickContentProps` type; values explicitly coerced with `Number(...)` at the call boundary
-**Problem:** Recharts v3 `tick` prop migration uses `as number` and `as { value: number }` casts that bypass type safety.
-**Impact:** Low — recharts tick API is stable, but fragile if upgraded again.
-**Fix:** Consider using recharts' exported `TickProps` type instead of casts.
+### 2. Sentry `transpileClientSDK` still enabled — Jira requirement #3 ⏸️ DEFERRED (by decision)
 
-### 5. Dead dependencies still present in customer-portal
+**[File: packages/shared/scripts/nextConfig.js]**
 
-**[File: apps/customer-portal/package.json]**
-**Function/Class:** N/A (package.json)
-**Severity:** low
-**Status:** ⬜ Deferred to PP-1752 (as originally planned) — `core-js`, `node-fetch`, `@types/node-fetch`, `@mdx-js/react` still present; scope of PP-1754 not expanded
-**Problem:** `core-js`, `node-fetch`, `@types/node-fetch` still listed despite `IMPROVEMENTS.md` flagging them as dead/phantom. `@mdx-js/react: "1"` also still in creative-portal.
-**Impact:** Unnecessary bundle bloat.
-**Fix:** Deferred to PP-1752 as planned — ensure that ticket tracks these explicitly.
+**Function/Class:** Sentry webpack options (line 57)
 
-### 6. Storybook alignment not addressed
+**Severity:** low (deferred to a separate ticket per team decision)
 
-**[File: N/A]**
-**Function/Class:** N/A
-**Severity:** low
-**Status:** ⬜ Deferred to a separate Storybook ticket (as noted in PR description); Jira PP-1754 still needs explicit update
-**Problem:** Jira ticket requirement #2 ("Remove alpha version of Storybook, align Storybook version across all portals") is not addressed.
-**Impact:** Jira requirement gap.
-**Fix:** PR description already notes "Storybook 8 — out of scope, separate tickets". Update the Jira ticket to reflect this deferral explicitly.
+**Note:** Deferred — not a blocker for this PR. One housekeeping item remains: the PR description claims `transpileClientSDK: false` while the code is still `true`; correct the description so it doesn't imply work that was deferred.
+
+**Detail:** Jira req #3 asks to "disable unnecessary client SDK transpilation," and the PR description explicitly claims `transpileClientSDK: false`. The actual value is still `transpileClientSDK: true`, and the PR diff does not touch this line. `transpileClientSDK: true` transpiles the Sentry SDK for IE11, inflating the client bundle (the project targets ES2018+).
+
+**Fix (when the deferred ticket is picked up):**
+
+```js
+// packages/shared/scripts/nextConfig.js
+transpileClientSDK: false,
+```
+
+Then re-verify Sentry still initializes and reports.
+
+### 3. Storybook alpha not removed / versions not aligned — Jira requirement #2 ⏸️ DEFERRED (by decision)
+
+**[File: apps/creative-portal/package.json]**
+
+**Function/Class:** `@storybook/*` devDependencies
+
+**Severity:** low (deferred to a separate ticket per team decision)
+
+**Detail:** creative-portal still pins `@storybook/addon-*`, `@storybook/nextjs`, `@storybook/react`, and `storybook` at `^7.0.0-alpha.48`, while the storybook app uses `^7.6.17`. Jira req #2 asks to remove the alpha and align versions across portals. The PR body lists "Storybook 8 — out of scope"; per team decision the alpha alignment is deferred to its own ticket.
+
+**Fix (when the deferred ticket is picked up):** Bump creative-portal's `@storybook/*` and `storybook` to the stable `^7.6.17` line used by the storybook app, and update the Jira scope so req #2 is formally tracked rather than silently dropped.
+
+### 4. file-type version split across the monorepo ✅ FIXED (`e4460091f`)
+
+**[File: packages/shared/package.json + apps/customer-portal/package.json]**
+
+**Function/Class:** `file-type` dependency
+
+**Severity:** low — **resolved**
+
+**Problem:** `packages/shared` declared `file-type: ^22.0.1` while `apps/customer-portal` declares `file-type: 19.6.0` — two majors of the same library, with the shared code path (the only real consumer) resolving to 22.x. This was the root cause of Issue 1 and a maintenance smell.
+
+**Resolution:** Both now resolve to `19.6.0` after the Issue 1 fix. Note: `apps/customer-portal` still *declares* `file-type: 19.6.0` but imports it nowhere (dead dependency, re-introduced by the develop merge — commit `02be61c37` had originally removed it). Optional follow-up: drop the unused line from `apps/customer-portal/package.json`. Left in place for now per author preference.
+
+### 5. iron-session v6→v8 migration — code correct, but PR description wrong + 2 deploy-time verifications
+
+**[File: packages/shared/lib/session.ts, packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts, `@types/session.ts` (×3), `withUserProvided` enhancers, page/api session call sites]**
+
+**Function/Class:** iron-session session handling
+
+**Severity:** low (migration is correct; items below are a description fix + pre-deploy verification, not code defects)
+
+**Context:** Despite the PR description stating *"No iron-session v8 upgrade (not needed once moduleResolution changed)"*, the PR **does** upgrade iron-session `^6.1.3 → ^8.0.4` across creative-portal, customer-portal, and shared (commit `12e194176`, "Upgrade iron-session from v6 to v8"). The v6→v8 API migration is done properly:
+
+| v6 (before) | v8 (after) | Correct? |
+|---|---|---|
+| `IronSessionOptions` | `SessionOptions` (renamed in v8) | ✅ |
+| `withIronSessionApiRoute(handler, opts)` from `iron-session/next` | manual `req.session = await getIronSession(req, res, opts)` wrapper in `withApiMiddleware` | ✅ |
+| `withIronSessionSsr` | manual `getIronSession(ctx.req, ctx.res, opts)` + `ctx.req.session = session` in `withUserProvided` enhancers | ✅ |
+| auto-augmented `http.IncomingMessage.session` | manually re-added (v8 dropped the automatic augmentation) | ✅ |
+| all page/api call sites | use v8 `getIronSession<IronSessionData>(req, res, sessionOptions)` | ✅ |
+
+All `iron-session/next` / `withIronSessionApiRoute` / `withIronSessionSsr` imports are gone, and **typecheck passes 5/5**, so the type side is sound. The runtime assignment (`req.session = await getIronSession(...)`) is present everywhere the augmented `req.session` type is read. **Mechanically, this is a clean, correct migration.** A full file-by-file audit + test results is in **Appendix A**.
+
+**Action items (not code defects):**
+
+1. **Correct the PR description** — it denies the v8 upgrade that the code actually performs. Reviewers/QA need to know a major auth-library bump is in scope.
+
+2. **Verify before deploy — existing sessions may be invalidated.** iron-session changed its cookie seal format between v6 (`@hapi/iron`) and v7+/v8; a v6-sealed cookie generally cannot be unsealed by v8, so already-logged-in users will likely be **forced to re-login once** after deploy. Not data loss, but call it out in release notes and QA (log in on current prod → deploy → confirm graceful re-login, not an error).
+
+3. **Verify before deploy — `password` length.** v8 hard-requires `SECRET_COOKIE_PASSWORD` ≥ 32 chars and throws at the first `getIronSession` call otherwise. v6 had the same minimum (so prod is *probably* fine), but since it's env-driven (`process.env.SECRET_COOKIE_PASSWORD`, not in-repo), confirm no environment (dev/test/staging/prod) has a secret under 32 chars.
+
+---
+
+## Validation Checks
+
+### Per-workspace results (Build · Typecheck · Test)
+
+| Workspace | Build | Typecheck | Tests |
+|---|---|---|---|
+| `@proofed/shared` | ✅ | ✅ | ⚠️ 1236/1237 (1 locale failure) |
+| `@proofed/wysiwyg-editor` | ✅ (45s) | ✅ | ✅ 245 passed, 4 skipped |
+| `@proofed/creative-portal` | ✅ (454s) | ✅ | ✅ 1660/1660 |
+| `@proofed/customer-portal` | ✅ (294s) | ✅ | ✅ 335/335 |
+| `@proofed/storybook` | ✅ (26s) | ✅ | — (no tests) |
+| **TOTAL** | **4/4 ✅** | **5/5 ✅** | **3576 pass / 1 fail / 4 skip** |
+
+The single test failure is `@proofed/shared` `formatWordQuantity.test.ts`, an `en_IN`-locale artifact (passes 9/9 under `en_US`/CI; file byte-identical to develop). `lint` remains ❌ only in `@proofed/wysiwyg-editor` (pre-existing prettier formatting, out of scope — see row below).
+
+### Suite-level
+
+| Check | Result | Notes |
+|---|---|---|
+| `npx turbo run test` | ❌ | 1 failure: `@proofed/shared` `formatWordQuantity.test.ts` expects `1,000,000` but got `10,00,000`. **Locale-driven** — the runner's locale is `en_IN`; the test passes 9/9 under `en_US` (CI/UTC), and the file is identical to develop. Not a code regression. creative-portal **1660/1660** ✅, customer-portal **335/335** ✅ |
+| `npx turbo run typecheck` | ✅ | 5/5 workspaces, 0 errors |
+| `npx turbo run lint` | ❌ | 63 `prettier/prettier` (formatting-only) errors in `@proofed/wysiwyg-editor`, across **5 files**: `components/molecules/AiChangeBox/index.tsx`, `components/molecules/CommentsContainer/utils.ts` + `formatIndividualDiffs.test.ts`, `contexts/EditorContext/hooks.ts`, `extensions/comments/index.ts`. **Pre-existing on develop** — all 5 files are byte-identical to develop **and** the lint toolchain is unchanged by the PR (`prettier ^3.2.5`, `eslint ^8.56.0`, `eslint-plugin-prettier ^5.1.3`), so develop produces the same 63 errors. The PR/merge did not touch them; auto-fixable via `--fix`. Out of PR scope. |
+| `npx turbo run build` | ✅ | **4/4 workspaces pass** after the file-type fix (`e4460091f`). Both customer-portal and creative-portal build clean. (Was ❌ on `7cf739c1c` — Issue 1.) |
 
 ---
 
 ## Tests
 
-- ✅ Test mocks updated for stricter TS 6.0 inference (`useGetAllOrderSortedJobs.test.ts`, `hooks.test.ts`)
-- ✅ date-fns-tz mocks updated (`__mocks__/date-fns-tz.ts`)
-- ✅ Sentry context tests updated for v10 API (`sentryContext.test.ts`, `sentryScrubber.test.ts`)
-- ✅ All `toast.TYPE.*` enum references fully migrated to string literals
-- ✅ All `react-dropzone/.` import paths fixed
-- ✅ PR description reports: typecheck 0 errors, builds succeed, tests pass
-- ⚠️ No new tests for iron-session v8 migration — existing coverage may suffice but manual verification needed
-- ⚠️ Swiper 8→11 (3 major versions) requires manual UI testing — correctly flagged in PR test plan
-- ⚠️ react-toastify 10 requires manual UI testing — correctly flagged in PR test plan
+- ✅ Typecheck green across all 5 workspaces under TS 6.0.2 — strong signal the config migration is correct.
+- ✅ creative-portal (1660), customer-portal (335), and wysiwyg (245 + 4 skipped) unit suites pass; shared 1236/1237 (the 1 failure is the locale artifact below).
+- ⚠️ The PR adds no new automated tests, but as a tooling/config upgrade the existing suites are the appropriate coverage. Acceptable for this ticket type. Note: the iron-session migration files have no *direct* unit coverage — see Appendix A.
+- ⚠️ The single shared test failure is environment/locale, not code — but worth pinning `Intl` locale (`en-US`) in `formatWordQuantity` or its test setup so it is deterministic across dev machines (pre-existing on develop; track separately).
+- ✅ **Build now passes (4/4)** after the file-type fix. The PR's own manual test items (Toast, Swiper carousel, file upload + mime detection, Google Picker, Sentry, **auth/login** for iron-session v8) remain unchecked and must be exercised — file upload/mime detection and auth especially.
 
 ---
 
@@ -142,265 +189,61 @@ const ft = await fileTypeFromBuffer(header);
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ All code changes are mechanically correct migrations |
-| Regression risk | ⚠️ Medium — swiper (3 major versions), Sentry (7→10), moduleResolution switch are high-risk areas requiring manual QA |
-| Tests | ⚠️ Automated tests pass and were updated; highest-risk changes (swiper, toastify, iron-session) need manual verification |
-| Code quality | ✅ Clean, consistent migration patterns across workspaces |
-| Mergeable state | ✅ Clean |
-
----
-
-## Package Changes (all 6 workspaces)
-
-### 1. `package.json` (root)
-
-| Package | Change |
-|---|---|
-| @playwright/test | 1.45.1 → 1.59.1 (also in resolutions) |
-| concurrently | ^9.1.2 → ^9.2.1 |
-| husky | ^8.0.0 → ^9.1.7 |
-| lint-staged | ^15.2.8 → ^16.4.0 |
-| turbo | 2.3.3 → 2.9.6 |
-
-### 2. `apps/creative-portal/package.json`
-
-**dependencies:**
-
-| Package | Change |
-|---|---|
-| @azure/storage-blob | ^12.12.0 → ^12.31.0 |
-| @emotion/react | ^11.11.4 → ^11.14.0 |
-| @emotion/styled | ^11.3.0 → ^11.14.1 |
-| @sentry/nextjs | 7.73.0 → ^10.48.0 |
-| @stripe/stripe-js | ^2.2.2 → ^9.2.0 |
-| @types/cookie | added |
-| @types/papaparse | ^5.3.5 → ^5.5.2 |
-| autoprefixer | ^10.4.8 → ^10.5.0 |
-| axios | ^0.27.2 → ^1.15.0 |
-| caniuse-lite | ^1.0.30001680 → ^1.0.30001788 |
-| clsx | ^1.2.1 → ^2.1.1 |
-| cookie | ^0.6.0 → ^1.1.1 |
-| date-fns | ^2.29.2 → ^4.1.0 |
-| date-fns-tz | ^2.0.0 → ^3.2.0 |
-| dotenv | ^16.5.0 → ^17.4.2 |
-| formidable | ^2.0.1 → ^3.5.4 |
-| formik | ^2.2.9 → ^2.4.9 |
-| iron-session | ^6.1.3 → ^8.0.4 |
-| js-base64 | ^3.7.7 → ^3.7.8 |
-| jsonwebtoken | ^9.0.2 → ^9.0.3 |
-| lodash | ^4.17.21 → ^4.18.1 |
-| node-html-parser | ^7.0.1 → ^7.1.0 |
-| papaparse | ^5.3.2 → ^5.5.3 |
-| postcss | ^8.4.16 → ^8.5.10 |
-| react-avatar-editor | ^13.0.0 → ^15.1.0 |
-| react-imask | ^7.1.3 → ^7.6.1 |
-| react-paginate | ^8.1.3 → ^8.3.0 |
-| react-phone-number-input | ^3.2.12 → ^3.4.16 |
-| react-scroll | ^1.8.7 → ^1.9.3 |
-| react-select | ^5.4.0 → ^5.10.2 |
-| stripe | ^14.9.0 → ^22.0.1 |
-| swiper | ^8.4.6 → ^11.2.6 |
-
-**devDependencies:**
-
-| Package | Change |
-|---|---|
-| @emotion/babel-plugin | ^11.10.2 → ^11.13.5 |
-| @sentry/types | 7.73.0 → removed |
-| @svgr/webpack | ^6.3.1 → ^8.1.0 |
-| @types/formidable | ^2.0.5 → ^3.5.1 |
-| @types/jsonwebtoken | ^9.0.6 → ^9.0.10 |
-| @types/lodash.throttle | ^4.1.7 → ^4.1.9 |
-| @types/node | 18.7.6 → ^20 |
-| @types/react-avatar-editor | ^13.0.0 → ^13.0.4 |
-| @types/react-phone-number-input | ^3.0.14 → ^3.1.37 |
-| @types/react-scroll | ^1.8.4 → ^1.8.10 |
-| @types/react-table | ^7.7.12 → ^7.7.20 |
-| @types/react-text-mask | ^5.4.11 → ^5.4.14 |
-| cross-env | ^7.0.3 → ^10.1.0 |
-| typescript | 5.3.3 → 6.0.2 |
-
-### 3. `apps/customer-portal/package.json`
-
-**dependencies:**
-
-| Package | Change |
-|---|---|
-| @sentry/nextjs | 7.73.0 → ^10.48.0 |
-| file-type | 19.6.0 → ^22.0.1 |
-| googleapis | ^136.0.0 → ^171.4.0 |
-| mobx | ^6.13.6 → ^6.15.0 |
-| react-datepicker | ^6.0.0 → ^9.1.0 |
-| recharts | ^2.12.0 → ^3.8.1 |
-| redoc | ^2.4.0 → ^2.5.2 |
-| stream-json | ^1.9.1 → ^2.1.0 |
-| styled-components | ^6.1.15 → ^6.4.0 |
-
-**devDependencies:**
-
-| Package | Change |
-|---|---|
-| @emotion/babel-plugin | ^11.10.2 → ^11.13.5 |
-| @sentry/types | 7.73.0 → removed |
-| @types/google.picker | ^0.0.42 → ^0.0.52 |
-| typescript | 5.3.3 → 6.0.2 |
-
-### 4. `apps/storybook/package.json`
-
-| Package | Change |
-|---|---|
-| @emotion/react | ^11.11.4 → ^11.14.0 |
-| typescript | 6.0.2 → added |
-
-### 5. `packages/shared/package.json`
-
-**dependencies:**
-
-| Package | Change |
-|---|---|
-| @emotion/babel-plugin | ^11.10.2 → ^11.13.5 |
-| @emotion/react | ^11.11.4 → ^11.14.0 |
-| @emotion/styled | ^11.3.0 → ^11.14.1 |
-| @types/formidable | ^3.4.5 → ^3.5.1 |
-| dompurify | ^3.2.5 → ^3.4.0 |
-| fast-xml-parser | ^5.0.8 → ^5.6.0 |
-| formidable | ^3.5.2 → ^3.5.4 |
-| framer-motion | 11.0.12 → ^12.38.0 |
-| lodash | ^4.17.21 → ^4.18.1 |
-| muhammara | ^5.3.0 → ^6.0.4 |
-| otpauth | ^9.4.1 → ^9.5.0 |
-| react-dropzone | ^14.2.2 → ^15.0.0 |
-| react-hotjar | 6.2.0 → 6.3.1 |
-| react-toastify | ^9.0.8 → ^10.0.6 |
-| transliteration | ^2.6.0 → ^2.6.1 |
-| usehooks-ts | ^3.1.0 → ^3.1.1 |
-
-**devDependencies:**
-
-| Package | Change |
-|---|---|
-| typescript | 6.0.2 → added |
-
-> Note: `"exports": { "./*": "./*" }` field was removed.
-
-### 6. `packages/wysiwyg/package.json`
-
-**dependencies:**
-
-| Package | Change |
-|---|---|
-| dompurify | ^3.2.5 → ^3.4.0 |
-| js-base64 | ^3.7.7 → ^3.7.8 |
-| react-toastify | 9.0.8 → 10.0.6 |
-| y-websocket | ^2.1.0 → ^3.0.0 |
-| yjs | ^13.6.24 → ^13.6.30 |
-
-**devDependencies:**
-
-| Package | Change |
-|---|---|
-| @rollup/plugin-commonjs | ^25.0.7 → ^29.0.2 |
-| @rollup/plugin-node-resolve | ^15.2.3 → ^16.0.3 |
-| @rollup/plugin-typescript | ^11.1.6 → ^12.3.0 |
-| autoprefixer | ^10.4.17 → ^10.5.0 |
-| clsx | ^2.1.0 → ^2.1.1 |
-| postcss | ^8.4.35 → ^8.5.10 |
-| postcss-import | ^16.1.1 → added |
-| rollup | ^4.9.6 → ^4.60.1 |
-| rollup-plugin-dts | ^6.1.0 → ^6.4.1 |
-| tslib | ^2.6.2 → ^2.8.1 |
-| typescript | ^5.3.3 → ^6.0.2 |
-
-**Total: ~85 package changes across 6 workspaces.**
-
----
-
-## Side-Effects Analysis
-
-Deep analysis of every major version bump for runtime side effects, missed migration spots, and dependency declaration issues.
-
-### Issues Found (action needed)
-
-#### HIGH — Must fix before merge
-
-| # | Package | Issue | File(s) | Status |
-|---|---|---|---|---|
-| 1 | **iron-session 6→8** | `iron-session` is only declared in `creative-portal/package.json`, but it's imported directly in `packages/shared` (session.ts, withApiMiddleware, login, MFA, etc.) and `customer-portal`. Relies on Yarn hoisting — fragile. | `packages/shared/package.json`, `apps/customer-portal/package.json` | ✅ Resolved — added `iron-session: ^8.0.4` to both `packages/shared/package.json` and `apps/customer-portal/package.json` |
-| 2 | ~~**Sentry 7→10**~~ **[STALE — Sentry reverted]** | `wrapApiHandlerWithSentry` exists in v7 — no longer a concern since Sentry stayed on 7.73.0. | `packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts` | ⚠️ N/A (stale) |
-| 3 | **react-dropzone** | Version mismatch — creative-portal declares `^14.2.2`, shared declares `^15.0.0`. Yarn hoisting may mask this but it's fragile. | `apps/creative-portal/package.json` vs `packages/shared/package.json` | ✅ Resolved — bumped creative-portal `react-dropzone` to `^15.0.0` |
-
-#### MEDIUM — Should fix
-
-| # | Package | Issue | File(s) | Status |
-|---|---|---|---|---|
-| 4 | ~~**Sentry 7→10**~~ **[STALE — Sentry reverted]** | `transpileClientSDK` / `autoInstrumentServerFunctions` are valid v7 options — no action needed. | `packages/shared/scripts/nextConfig.js` | ⚠️ N/A (stale) |
-| 5 | ~~**Sentry 7→10**~~ **[STALE — Sentry reverted]** | `getContext()` is the correct v7 mock API — no action needed. | `packages/shared/__mocks__/@sentry/nextjs.ts` | ⚠️ N/A (stale) |
-| 6 | **axios 0.27→1** | `AxiosRequestHeaders` cast on `{orgId?: number}` in `services/customers/index.tsx`. The type changed in v1 — this cast is dubious. | `apps/creative-portal/services/customers/index.tsx` | ✅ Resolved — removed `AxiosRequestHeaders` cast; stringify `orgId`/`orgGroupId` before passing as headers |
-| 7 | **@types/react-datepicker** | Still at `^6.0.0` but react-datepicker v9 bundles its own types. Stale `@types` may conflict. | `apps/customer-portal/package.json` | ✅ Resolved — removed `@types/react-datepicker` from customer-portal devDependencies |
-| 8 | **file-type 19→22** | `readFileSync(entireFile)` for MIME detection — should read only first 4KB to avoid OOM on large uploads. | `packages/shared/utils/files/processWorkItemContentWithMetadata.ts` | ✅ Resolved — replaced with `openSync`+`readSync` reading only first 4100 bytes |
-
-#### LOW — Nice to fix
-
-| # | Package | Issue | File(s) | Status |
-|---|---|---|---|---|
-| 9 | **stream-json 1→2** | Zero source imports — unused dependency. | `apps/customer-portal/package.json` | ✅ Resolved — removed from customer-portal dependencies |
-| 10 | **file-type** | Declared in customer-portal but no imports found there — unused. | `apps/customer-portal/package.json` | ✅ Resolved — removed from customer-portal and moved to `packages/shared` (where it is actually imported) |
-| 11 | **muhammara 5→6** | Native binary rebuild — test PDF metadata injection in dev. | N/A | ⬜ Manual QA pending (runtime-only, no code change needed) |
-
-### Clean — No side effects found
-
-| Package | Verdict |
-|---|---|
-| **swiper 8→11** | All props valid, `Mousewheel` import path updated, CSS paths correct |
-| **react-toastify 9→10** | All enum references migrated to string literals, 0 remaining |
-| **framer-motion 11→12** | All transition types valid (`"spring"`, `"tween"`, `ease: "easeInOut"/"linear"`) |
-| **date-fns 2→4 + date-fns-tz 2→3** | All 20+ files migrated (named imports, `toZonedTime`/`fromZonedTime`), 0 old names remaining |
-| **recharts 2→3** | All chart components compatible, tick prop updated |
-| **formidable 2→3** | All file access patterns already handle v3 array semantics |
-| **stripe 14→22 + @stripe/stripe-js 2→9** | Identity API stable, `loadStripe`/`verifyIdentity` unchanged |
-| **cookie 0.6→1.1.1** | Cookie names are simple `trustBrowser-{userId}` — passes v1 validation |
-| **react-avatar-editor 13→15** | Already using v15 `AvatarEditorRef` type |
-| **googleapis 136→171** | Stable Google API methods (Drive v3, Docs, Sheets, Slides) |
-| **iron-session code migration** | All 23+ files correctly migrated from HOC wrappers to `getIronSession()` |
-| **axios code migration** | `onUploadProgress.total` optional, numeric status checks, no `CancelToken` usage |
-| **dotenv, cross-env, husky, lint-staged** | Config/dev-only, no runtime impact |
-| **react-datepicker 6→9** | Only 1 usage site, all props valid (`selected`, `onChange`, `selectsRange`, `inline`, etc.) |
-| **y-websocket 2→3** | Provider API unchanged |
-| **Rollup plugins** | Plugin APIs backward-compatible for current config |
-
-### Recommended priority order
-
-1. ✅ **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`** — **Done**
-2. ✅ **Align react-dropzone** — bumped creative-portal to `^15.0.0` to match shared — **Done**
-3. ✅ **Remove `@types/react-datepicker`** from customer-portal — **Done**
-4. ✅ **Fix `readFileSync` for MIME detection** — now reads only first 4100 bytes — **Done**
-5. ✅ **Remove unused deps** (`stream-json`, `file-type` in customer-portal) — **Done** (file-type moved to `packages/shared` where it is actually used)
-6. ~~Verify `wrapApiHandlerWithSentry` exists in v10~~ **[STALE — Sentry reverted to v7]**
-7. ~~Clean up Sentry mock and deprecated `nextConfig.js` options~~ **[STALE — Sentry reverted to v7]**
-
-All non-stale Side-Effects items (1, 3, 6, 7, 8, 9, 10) are resolved. Item 11 (`muhammara 5→6` native-binary QA) is a runtime test that needs manual verification before merge.
+| Correctness | ✅ Config/type migration is sound; build blocker fixed; iron-session v6→v8 migrated correctly; Sentry + Storybook reqs deferred to separate tickets by decision |
+| Regression risk | ⚠️ Medium — swiper (3 majors), react-toastify (1 major), iron-session (2 majors, may force one-time re-login), date-fns/date-fns-tz major bump (timezone math) need QA; bundler resolution can surface more raw-ESM packages |
+| Tests | ⚠️ Suites pass except 1 locale-env failure; no new tests (acceptable for tooling); auth-migration files covered indirectly only (Appendix A) |
+| Code quality | ✅ Clean, well-documented migrations |
+| Validation suite | ✅ `build` 4/4 + `typecheck` 5/5; remaining `lint`/`test` failures are pre-existing on develop (out of scope) |
+| Mergeable state | ✅ Builds clean; no open blockers (Sentry/Storybook deferred by decision; iron-session needs pre-deploy verification, not a merge blocker) |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions**
+**Approve** — the build blocker is fixed (`e4460091f`, build now 4/4 green) and the two outstanding Jira requirements (Sentry, Storybook) are intentionally deferred to separate tickets per team decision. No open blockers remain.
 
-1. ✅ **Add `iron-session` to `packages/shared/package.json` and `apps/customer-portal/package.json`** — **Done** (previously relied on Yarn hoisting from creative-portal).
-2. ✅ **Align react-dropzone versions** — creative-portal bumped from `^14.2.2` to `^15.0.0` to match shared. **Done**
-3. ✅ **Fix `readFileSync` for MIME detection** — now reads only the first 4100 bytes instead of the entire file. **Done**
-4. ✅ **Remove `@types/react-datepicker`** from customer-portal — react-datepicker v9 ships its own types. **Done**
-5. ✅ **Remove unused deps** — `stream-json` removed; `file-type` relocated from customer-portal to `packages/shared` (where it is actually imported). **Done**
-6. ✅ **Remove fragile `AxiosRequestHeaders` cast in `services/customers/index.tsx`** — headers now explicitly stringified. **Done**
-7. ✅ **Replace recharts tick `as` casts** with `YAxisTickContentProps` in `UsageChart`. **Done**
-8. ✅ **Use `"Untitled"` fallback** for nullable Google Picker `file.name`. **Done**
-9. ⬜ **Manual QA the test plan items** before merging — especially swiper carousel, toast notifications, iron-session login/logout flows, and `muhammara` PDF metadata injection.
-10. ⬜ **Document scope expansion on the Jira ticket** — the PR goes well beyond the ticket's stated scope (justified, but should be documented for traceability).
-11. ⬜ **Note Storybook deferral** — explicitly mark Jira requirement #2 as deferred to a separate ticket.
+1. ✅ **Done — Blocker (Issue 1):** `packages/shared` file-type aligned to `19.6.0`; `npx turbo run build` green for both portals.
+2. ⏸️ **Deferred (Issue 2 — Sentry req #3):** `transpileClientSDK: false` deferred to a separate ticket. Housekeeping: correct the PR description, which claims `false` while the code is still `true`.
+3. ⏸️ **Deferred (Issue 3 — Storybook req #2):** creative-portal alpha alignment deferred to a separate ticket. Update the Jira scope so req #2 is formally tracked rather than silently dropped.
+4. **iron-session v6→v8 (Issue 5 + Appendix A):** migration code is correct and type-checks, but (a) correct the PR description, which wrongly claims no v8 upgrade; (b) verify before deploy that existing sessions degrade gracefully (likely one-time forced re-login due to the v6→v8 cookie seal-format change) and that `SECRET_COOKIE_PASSWORD` is ≥ 32 chars in every environment.
+5. **Before merge, run the PR's manual QA checklist** — Toast (all 4 types + maintenance banner), OrderJobs swiper carousel, customer-portal file upload + mime detection, Google Picker, Sentry reporting, **and an auth/login round-trip** (iron-session v8).
+6. **Track separately (not blockers, pre-existing on develop):** the `wysiwyg` prettier lint errors and the `formatWordQuantity` locale-dependent test. Optional cleanup: drop the now-unused `file-type` declaration from `apps/customer-portal/package.json` (Issue 4).
 
-> ~~Verify `wrapApiHandlerWithSentry` in Sentry v10~~ and ~~Clean up Sentry config (deprecated options + stale mock)~~ — **[STALE]** Sentry 7→10 upgrade was reverted (commits `05c364a1a`, `7e5cd7c63`); these items no longer apply.
+_Note: this branch carries a fresh `develop` merge (`7cf739c1c`) that was resolved prior to review, plus the file-type build fix (`e4460091f`). The original build failure was independent of the merge — file-type `^22` predated it (commit `02be61c37`)._
 
-### Verification (on current working tree)
-- `npx turbo run typecheck` → 5/5 workspaces pass (0 errors)
-- ESLint on each file touched by this review — clean (pre-existing lint errors in `packages/wysiwyg` and `packages/shared` are unchanged by these edits)
-- `npx turbo run test` → all suites green (950 shared, 706 creative-portal, plus customer-portal and wysiwyg)
+---
+
+## Appendix A — iron-session v6→v8 full file audit
+
+**Driver:** iron-session `^6.1.3 → ^8.0.4` (commit `12e194176`). 22 code/type files + 3 `package.json` + `yarn.lock`. Grouped by change-pattern (the patterns repeat across files).
+
+| Group | Files | What & why | Correct? |
+|---|---|---|---|
+| **A. Dependency** | `apps/{creative,customer}-portal/package.json`, `packages/shared/package.json`, `yarn.lock` | `iron-session ^6.1.3 → ^8.0.4`; added to customer-portal + shared (were hoisting) | ✅ resolves 8.0.4; build/typecheck green |
+| **B. Options** | `packages/shared/lib/session.ts` | `IronSessionOptions` → `SessionOptions` (v8 rename); values unchanged | ✅ behavior-identical |
+| **C. Type augmentation (×3)** | `packages/shared/@types/session.ts`, `apps/{creative,customer}-portal/@types/session.ts` | re-add `http.IncomingMessage.session` (v6 auto-augmented, v8 dropped it) | ✅ restores v6 typing |
+| **D. Type generics (×4)** | `packages/shared/api/types/authenticatedNextApiRequest.ts`, `apps/{creative,customer}-portal/api/types/authenticatedNextApiRequest.ts`, `packages/shared/.../withApiMiddleware/types.ts` | `IronSession` → `IronSession<IronSessionData>`; `IronSession["user"]` → `IronSessionData["user"]` (v8 made `IronSession` generic) | ✅ v8-accurate |
+| **E. API middleware** | `packages/shared/api/utils/middlewares/withApiMiddleware/withApiMiddleware.ts` | `withIronSessionApiRoute` → manual `req.session = await getIronSession(req,res,opts)` wrapper | ✅ canonical v8 pattern |
+| **F. SSR enhancers (×4)** | `apps/{creative,customer}-portal/api/enhancers/withUserProvided/{index.ts,utils.ts}` | `withIronSessionSsr` → inline `getIronSession`; re-attaches `context.req.session = session`; `user` passed explicitly into `handleCustomHandler` | ✅ equivalent, cleaner |
+| **G. API routes (×2)** | `apps/creative-portal/pages/api/user.ts`, `apps/{creative,customer}-portal/pages/api/logout.ts` | HOC → default-export handler + inline `getIronSession`; `session.destroy()` / `session.user` | ✅ v8 `destroy()` writes clear-cookie header synchronously |
+| **H. SSR pages (×5)** | `apps/{creative,customer}-portal/pages/log-in.tsx`, `apps/{creative,customer}-portal/pages/settings/reset-password.tsx`, `apps/customer-portal/components/pages/home/index.tsx` | `withIronSessionSsr` → plain `getServerSideProps` (typed `GetServerSidePropsContext`) + inline `getIronSession`; read-only, no `save()` needed | ✅ correct |
+| **I. Adjacent (not iron-session)** | `apps/customer-portal/api/trustBrowser/trustBrowser.ts` | only change is the **cookie** import (`import cookie` → `import { serialize as serializeCookie }`, part of the `dc1945056` default-import crash fix); `req.session.user.id` read unchanged | ✅ cookie named-import fix |
+
+### Test results (session-touching tests)
+
+| Workspace | Test files | Tests | Pass | Fail |
+|---|---|---|---|---|
+| shared (`resetSms`, `TrustBrowserModal`) | 2 | 12 | 12 | 0 |
+| creative-portal (`lib/session.test.ts` + 10 session-mocking integration tests) | 11 | 79 | 79 | 0 |
+| customer-portal (`usageReportData`, `getProjects`, `phone-verify`) | 3 | 13 | 13 | 0 |
+| **TOTAL** | **16** | **104** | **104 ✅** | **0** |
+
+### Coverage caveat & risk (honest)
+
+**Code-level: correct and consistent** across all 22 files — every v6 entry point is removed, types/middleware/enhancers/routes/pages follow the canonical v8 pattern, typecheck 5/5 + build 4/4 + the 104 session-touching tests all green.
+
+**But not zero-risk:**
+- **Test coverage of the migration itself is thin.** The 104 tests **mock the session** and exercise *downstream* logic — they prove the session *contract/shape* is intact, not the runtime auth flow. The migrated files (`withApiMiddleware`, `withUserProvided`, `pages/api/*`, SSR pages, trustBrowser) have **no direct unit tests**; `lib/session.test.ts` only asserts cookie-lifetime constants. So runtime-auth correctness rests on typecheck + manual QA.
+- **Two deploy-time verifications remain** (see Issue 5 items 2–3): v6→v8 cookie seal-format change → likely one-time forced re-login; `SECRET_COOKIE_PASSWORD` ≥ 32 chars in every env.
+
+**Manual QA to close the gap:** login (session set), logout (`destroy()` clears cookie + redirect), MFA (`/api/user` returns null when `mfaVerified === false`), idle/expiry logout, maintenance-mode destroy+redirect, trust-browser cookie set, and confirm a v6-era cookie degrades to a clean re-login (not an error).

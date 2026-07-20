@@ -2,90 +2,9 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2253
 **Jira:** https://proofed.atlassian.net/browse/PP-1750
-**Status:** In Progress
-**Mergeable state:** ✅ Up-to-date with `develop` (merge commit `d22331582`, 0 behind)
-**CI status:** pending
-
----
-
-## Resolution Status (updated 2026-04-20, post-develop-merge)
-
-All 12 valid review points are addressed on branch `fix/PP-1750-improve-error-tracking`. The two invalid points are skipped with rationale below.
-
-| # | Issue | Status | Landing commit |
-|---|---|---|---|
-| 1 | Caller-supplied `extra` overwritten by axios details | ✅ Resolved | `af8f89c78` |
-| 2 | Duplicated QueryClient + interceptor bootstrap | ✅ Resolved — extracted to `createAppQueryClient` | `af8f89c78` |
-| 3 | Narrow error boundary scope | ✅ Resolved — boundary is outermost, inside `<ThemeProvider>` | `af8f89c78` |
-| 4 | Axios `AxiosHeaders` prototype stripped by spread | ⚠️ **Conditional** — safe on `develop` today (`axios ^0.27.2`, plain-object headers). **Becomes a real hazard once [PR #2261](https://github.com/Proofed/B2BWebserver/pull/2261) merges**, which bumps axios `^0.27.2 → ^1.15.0`. Axios 1.x uses the `AxiosHeaders` class and our spread pattern in `installAxiosCorrelationInterceptor` will strip it. See "Blocking follow-up" below. | — |
-| 5 | High-cardinality `route` tag | ✅ Resolved — new `getSentryRoute()` helper prefers Next router template (`/orders/[id]`) | `af8f89c78` |
-| 6 | Error ID shown in boundary but not in `ErrorPage` | ✅ Resolved — `errorId` threaded through `getInitialProps` and rendered | `af8f89c78` |
-| 7 | Unsafe `as Error & { statusCode?: number }` cast | ✅ Resolved — narrowed to `{ statusCode?: number } \| null` | `af8f89c78` |
-| 8 | Sentry mock missing v10 API surface | ✅ Resolved — added `withIsolationScope`, `withScope`, `replayIntegration`, `browserTracingIntegration`, `setUser`, `flush`, `getScopeData` | `af8f89c78` |
-| 9 | No test for `withIsolationScope` migration | ✅ Resolved — new `withSentryUser.test.ts` (5 tests) | `af8f89c78` |
-| 10 | Module-scope `installAxiosCorrelationInterceptor()` | ✅ Resolved — moved into `useEffect` in both `_app.tsx` | `af8f89c78` |
-| 11 | Stale `/* eslint-disable no-console */` | ✅ Resolved — removed from `sentryContext.ts:1` | `af8f89c78` |
-| 12 | `^10.48.0` caret range | ✅ Resolved — pinned to exact `10.48.0` in both portals. Note: the reviewer's framing ("project convention is exact pinning") is wrong in general — the repo uses caret ranges almost everywhere — but the previous `@sentry/nextjs` entry on `develop` **was** exact-pinned (`"7.73.0"`), and after a major-version bump it's defensive to keep the exact-pin convention for this dep rather than allowing silent drift on a freshly-upgraded SDK. |
-| 13 | No test for `reportError` with primitive inputs | ✅ Resolved — 4 new primitive tests + caller-wins test | `af8f89c78` |
-| 14 | No test for `_app.tsx` QueryCache/MutationCache wiring | ✅ Resolved — factory extraction + `createAppQueryClient.test.ts` (5 tests) | `af8f89c78` |
-
-### Post-review hardening
-
-| Change | Commit |
-|---|---|
-| Wrap non-Error `reportError` inputs in synthetic `Error("Non-Error thrown: …")` so Sentry shows searchable titles instead of `<unknown>`; raw value preserved at `extra.originalValue` | `c6ee03005` |
-| Pin `@sentry/nextjs` to exact `10.48.0` to prevent silent drift on a freshly-upgraded SDK (closes review #12) | `8dbf0b9de` |
-
-> The `/sentry-test` manual verification page (commits `c3cc2397b` and `069833755`) was reverted before merge — the full `1008/1008` automated suite already covers every error-tracking path, and keeping a dev-only page reachable on stage/devtest created noise without lasting value.
-
-### Verification
-
-- `npx turbo run test --filter=@proofed/shared` → **1008/1008 passing**
-- `npx turbo run typecheck --filter=@proofed/shared` → no new errors (pre-existing errors in `Loader`, `Typography`, `iron-session` are orthogonal to this PR and exist on `HEAD~4`)
-- `npx turbo run lint --filter=@proofed/shared --filter=@proofed/creative-portal --filter=@proofed/customer-portal` → clean for PP-1750 files (pre-existing errors in other files are unrelated)
-
-### Blocking follow-up: axios 1.x compatibility (#4)
-
-[PR #2261 "PP-1754: Upgrade TypeScript to v6 and development tooling"](https://github.com/Proofed/B2BWebserver/pull/2261) upgrades `axios ^0.27.2 → ^1.15.0`. Direct evidence from that PR's diff:
-
-```diff
-# apps/creative-portal/package.json
--    "axios": "^0.27.2",
-+    "axios": "^1.15.0",
-```
-
-and from `IMPROVEMENTS.md` in the same PR:
-
-```diff
-+| axios | 0.27 | 1.15.0 | ✅ Done | |
-```
-
-PR #2261 already updated its own axios interceptor (`apps/creative-portal/api/utils/tiptap/api.ts`) to mutate `config.headers.Authorization` instead of reassigning `config.headers`. **But it did NOT update `packages/shared/utils/installAxiosCorrelationInterceptor.ts`** — that file still uses the spread pattern the reviewer flagged:
-
-```ts
-return {
-  ...config,
-  headers: { ...headers, [CORRELATION_HEADER]: corrId } as typeof config.headers
-};
-```
-
-Under axios 1.x, `config.headers` is an `AxiosHeaders` class instance. Spreading strips the prototype, so any downstream interceptor or axios internal that calls `config.headers.set(...)`, `.get(...)`, `.has(...)` will throw `TypeError: config.headers.set is not a function`.
-
-**Action before PR #2261 merges** — replace the spread pattern with direct mutation via `AxiosHeaders` API:
-
-```ts
-axios.interceptors.request.use((config) => {
-  const existing = config.headers?.get?.(CORRELATION_HEADER);
-  const corrId =
-    typeof existing === "string" && existing.length > 0
-      ? existing
-      : generateCorrelationId();
-  config.headers.set(CORRELATION_HEADER, corrId);
-  return config;
-});
-```
-
-This is safe in axios 1.x (uses the class API) and should be landed either as a follow-up commit on PP-1750 **or** included in PR #2261's migration. Whichever comes first — but the fix MUST exist before axios 1.15.0 reaches `develop`, otherwise every browser request will break.
+**Status:** Code Review (Jira) · PR open, `mergeable_state: clean`
+**Branch:** `fix/PP-1750-improve-error-tracking` → `develop`
+**Size:** 54 files, +3571 / −1189, 21 commits
 
 ---
 
@@ -93,266 +12,240 @@ This is safe in axios 1.x (uses the class API) and should be landed either as a 
 
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
-| 1.1 Capture all unhandled React errors | `AppErrorBoundary` wraps `<Component>` in both apps; shared `_error.tsx` calls `captureUnderscoreErrorException` for SSR errors. | ⚠️ Partial — boundary scope is narrow (see issue #3). |
-| 1.2 Errors that interrupt user actions are tracked | `QueryCache`/`MutationCache` global `onError` + migration of 13+ `console.error` swallow sites to `reportError`. | ✅ Addressed |
-| 1.3 Contextual metadata (user, route, component, timestamp) | `reportError` accepts `source`, `operation`, `route`, `component`, `queryKey`, `mutationKey`, `httpStatus`, `extra`, `corrId`; `setSentryContext` adds identifiers/request scope. Timestamp is Sentry-default. | ✅ Addressed |
-| 2.1 Log internal API failures | Axios response interceptor pushes `corr_id`/`http_status`/`route` into Sentry scope; React Query `onError` reports with axios details. | ✅ Addressed |
-| 2.2 Error includes endpoint / status / corr_id / request metadata | `reportError` serializes `url`, `method`, `params`, `requestData`, `responseData`, `responseStatus`, `requestHeaders`, `responseHeaders` when axios error detected. | ✅ Addressed |
-| 3.1 Third-party (Wise) failures captured | `useMutation(postCreateRecipient, { onError: () => reportError(..., { source: "wise", operation: "createRecipient" }) })`. | ✅ Addressed |
-| 3.2 Service name / endpoint / status | `source` tag + `operation` tag + axios extras provide all three. | ✅ Addressed |
-| 4 Centralized monitoring | All paths route through `Sentry.captureException`; corr_id tag joins frontend Sentry with backend Logtail events. | ✅ Addressed |
-| 5 Consistent logging coverage | 14 swallow sites migrated; zero `console.error` swallows remain in changed files. | ✅ Addressed |
+| 1.1 All unhandled React errors captured | `AppErrorBoundary` (`componentDidCatch → reportError`, `source=error-boundary`) wraps both apps' root; shared `ErrorPage`/`_error.tsx` captures SSR errors via `captureUnderscoreErrorException` | ✅ Addressed |
+| 1.2 Errors interrupting user actions tracked | 14 `console.error` swallow sites migrated to `reportError`; react-query `QueryCache`/`MutationCache` `onError` | ⚠️ Partial — one swallow site missed (see Issue 3) |
+| 1.3 Contextual metadata (user, route, component, timestamp) | user via `useSentryIdentity`/`withSentryUser`; route via `getSentryRoute`; component via `componentName`; timestamp by Sentry | ✅ Addressed (SSR route caveat — Issue 6) |
+| 2.1 Internal API failures logged | `QueryCache`/`MutationCache` global `onError → reportError` (`source=react-query`) fires even when per-hook `onError` shadows defaults | ✅ Addressed |
+| 2.2 endpoint, HTTP status, correlation ID, request metadata | `buildExtras` adds url/method/params/requestData/responseData; `http_status` tag auto-derived from axios; `x-correlation-id` via interceptor | ✅ Addressed (SSR/custom-instance gaps — Issue 5) |
+| 3.1 Third-party (Wise) failures captured | `wise/createRecipient` `onError → reportError` (`source=wise`, `operation=createRecipient`) | ✅ Addressed |
+| 3.2 service name, operation, status/message | `source=wise`, `operation=createRecipient`, `http_status` auto-derived | ✅ Addressed |
+| 4 Centralized monitoring across all 3 surfaces | All paths route to Sentry with a `source` tag distinguishing react/api/third-party | ✅ Addressed |
+| 5 Consistent coverage | Broad migration across both apps | ⚠️ Partial — BriefStep swallow missed; SSR/custom-axios uncovered |
 
-**Beyond-scope changes also present:**
-
-- Sentry SDK upgrade `7.73.0` → `^10.48.0` (major × 3 bumps). This is a high-risk refactor that was *not* in the original Jira scope; it's called out in the PR description as "deferred" but was merged in anyway in a later commit (`fb9a37c01`).
-- `transpileClientSDK: true` removed (drops IE11 transpilation).
-- Trace sampling changed from 100% everywhere to tiered (devtest 1.0 / stage 0.5 / production 0.1) — good change, but out of ticket scope.
-- Scrubber cleanup (deduplicate SENSITIVE_FIELDS, remove redundant re-scrub).
+**Scope beyond Jira (flagged):**
+- **Major undocumented dependency upgrade** — `@sentry/nextjs` `7.73.0 → 10.48.0` (Issue 1). The PR description lists this as *deferred*.
+- Sentry config hardening (env-aware `tracesSampleRate`, `debug:false`, `enabled` gate, removal of `transpileClientSDK`/`hideSourceMaps`, scrubber cleanup) — sensible quota/PII follow-ups, but beyond the strict ticket scope.
+- `TASKS_COMPLETED.md` deleted (−653 lines) — consistent with the team decision to drop that log, but an unrelated deletion bundled into this PR.
 
 ---
 
 ## Architecture Analysis
 
-The approach is sound: a shared `reportError(error, context)` utility funnels every error through `Sentry.captureException` with consistent tags (`source`, `operation`, `http_status`, `corr_id`) and structured extras. Around this:
+The approach is sound and well-layered. A single `reportError(error, context)` core in `throwSentryError.ts` is the funnel for every surface (error boundary, react-query caches, third-party calls, migrated swallow sites), with `throwSentryError` preserved as a thin backward-compatible wrapper. Cross-cutting concerns are factored into reusable shared utilities (`createAppQueryClient`, `installAxiosCorrelationInterceptor`, `getSentryRoute`, `baseInit`) so both portals stay in lock-step — a good fit for the monorepo's `@proofed/shared` convention. PII handling is thoughtful: query/mutation keys and HTTP bodies are pre-scrubbed *before* serialization because the global `beforeSend` scrubber can't recurse into already-stringified extras. Non-Error throws are wrapped in synthetic Errors so Sentry can group/title them. The `AppErrorBoundary` correctly sits inside `ThemeProvider` so its styled fallback has theme access.
 
-- `AppErrorBoundary` — hand-rolled React boundary (correct; no hook equivalent exists).
-- `installAxiosCorrelationInterceptor` — module-level side effect that stamps every outgoing axios request with `x-correlation-id` and pushes scope metadata on response errors.
-- `QueryCache`/`MutationCache` global `onError` — catches errors even when per-hook `onError` shadows the default.
-- `_error.tsx` — shared SSR error page re-exported in both apps.
-
-The Sentry SDK bump (v7 → v10) is significant. It rewrites `sentryContext.ts` from the legacy `Scope.getContext()` API to `getScopeData().contexts`, replaces `Sentry.runWithAsyncContext` with `Sentry.withIsolationScope` in `withSentryUser.ts`, and switches from class-based `new Sentry.Replay(...)` to functional `Sentry.replayIntegration(...)`. The semantic difference between `runWithAsyncContext` (shared scope across awaits) and `withIsolationScope` (isolated scope per block) is not covered by any new test — this is worth validating in stage before merge.
-
-Duplication remains between the two portals' `_app.tsx` files: ~40 lines of identical QueryClient/QueryCache/MutationCache bootstrap plus the interceptor install and `AppErrorBoundary` wrapper. Given `@proofed/shared` already hosts all the error-tracking utilities, this bootstrap should live there too.
+The main architectural caveats are (a) the response interceptor mutating the **global** Sentry scope (context bleed — Issue 2), and (b) the gap between the PR's stated scope and the actual SDK major-version jump that the new code structurally depends on (Issue 1).
 
 ---
 
 ## Issues Found
 
-### 1. `reportError` caller-supplied `extra` is silently overwritten by axios details
+### 1. Sentry SDK upgraded v7→v10 despite description saying it's deferred ✅ Resolved (2026-06-18)
 
-**[File: packages/shared/utils/throwSentryError.ts]**
-**Function/Class:** `buildExtras`
+**[File: apps/creative-portal/package.json, apps/customer-portal/package.json, yarn.lock]**
+
+**Function/Class:** dependency `@sentry/nextjs`
+
+**Severity:** high
+
+**Problem:** Both apps bump `@sentry/nextjs` from `7.73.0` to `10.48.0` (and drop `@sentry/types`), with ~1238 lines of `yarn.lock` churn. The new code structurally depends on v8+ APIs: `Sentry.withIsolationScope` (replaces v7 `runWithAsyncContext`), `Sentry.captureUnderscoreErrorException`, `getCurrentScope().getScopeData()`, and the functional `replayIntegration()`/`browserTracingIntegration()`. Yet the PR description's "Not in scope (deferred)" section explicitly says: *"Sentry SDK v7 → v9 upgrade (breaking API changes, separate ticket)."* The description's commit list (`fc6d94cc0`, `e9b6c76d9`, `c5d41adf8`) is also stale — the branch now has 21 commits.
+
+**Impact:** A v7→v10 jump crosses multiple breaking-change boundaries (the v7→v8 rewrite especially). Because the description says the upgrade is deferred, reviewers and QA will not test it, and all five runtime verification checkboxes in the test plan (error boundary, 500 capture, Wise failure, header propagation, end-to-end corr_id) remain **unchecked**. `CLAUDE.md` still documents "Error Tracking: Sentry 7.73.0". Risk of undetected behavioral regressions in Sentry init, replay, tracing, and SSR capture on Next 14.1.1, plus potential interaction with `@logtail/next` (customer portal).
+
+**Fix:** This is primarily a process/scope correctness issue — the upgrade itself is justified since the implementation requires v8+ APIs. Before merge: (1) correct the PR description to state the upgrade was performed and to what version; (2) update `CLAUDE.md`; (3) run the full runtime test plan on a deployed devtest/stage environment and check the boxes; (4) confirm `@sentry/nextjs@10` peer compatibility with Next 14.1.1 and that the tunnelRoute/sourcemap upload still work. Consider isolating the SDK upgrade into its own commit with a clear message for bisectability.
+
+**Resolution (2026-06-18):**
+
+- ✅ **PR description rewritten** — added a "Dependency change — Sentry SDK v7 → v10" section naming the version jump, the v8+ APIs the new code requires (`withIsolationScope`, `captureUnderscoreErrorException`, `getCurrentScope().getScopeData()`, functional integrations), the `__mocks__/@sentry/nextjs.ts` v10 surface update, and the reviewer asks (runtime plan + `tunnelRoute`/sourcemap check on Next 14.1.1). The `Sentry SDK v7 → v9 upgrade` bullet has been removed from "Not in scope (deferred)". A note acknowledges the branch has grown to 22 commits beyond the three originally listed.
+- ✅ **`CLAUDE.md:20`** updated from `Sentry 7.73.0` to `Sentry 10.48.0 (@sentry/nextjs)`.
+- ⏳ **Runtime test plan** (5 unchecked items: error boundary, 500 capture, Wise failure, header propagation, end-to-end corr_id) — to be walked through on devtest/stage. The `/sentry-test` dev page added in commit `c3cc2397b` covers items 1–4 directly; item 5 needs a Logtail cross-reference.
+- ⏳ **Peer compatibility / tunnelRoute / sourcemap upload** on Next 14.1.1 — to be smoke-tested on devtest deploy.
+
+### 2. Response-error interceptor mutates the global Sentry scope (context bleed) ✅ Resolved (2026-06-18)
+
+**[File: packages/shared/utils/installAxiosCorrelationInterceptor.ts]**
+
+**Function/Class:** `installAxiosCorrelationInterceptor` (response-error handler)
+
 **Severity:** medium
-**Problem:** `context.extra` is spread first (line 69), then the builder sets `route`, `component`, `queryKey`, `mutationKey`, and — when the error is an axios error — `url`, `method`, `params`, `requestData`, `responseData`, `responseStatus`, `requestHeaders`, `responseHeaders`. A caller passing `extra: { url: "..." }` or `extra: { method: "..." }` alongside an axios error will have their values silently overwritten.
-**Impact:** Surprising precedence — call sites that think they're enriching an event may actually have their values clobbered, and reviewers reading Sentry events won't know the displayed `url` is the axios one versus the caller's intent.
-**Fix:** Either spread `extra` last (caller wins), or namespace axios fields (`axios_url`, `axios_method`, ...), or assert non-overlap. Simplest:
 
-```ts
-const buildExtras = (error, context) => {
-  const extras: Record<string, unknown> = {};
-  if (context.route) extras.route = context.route;
-  if (context.component) extras.component = context.component;
-  if (context.queryKey !== undefined) extras.queryKey = serializeAndTruncate(context.queryKey);
-  if (context.mutationKey !== undefined) extras.mutationKey = serializeAndTruncate(context.mutationKey);
-  if (axios.isAxiosError(error)) {
-    Object.assign(extras, {
-      axiosUrl: error.config?.url,
-      axiosMethod: error.config?.method,
-      // ...
+**Problem:** On every response error the interceptor calls `setSentryContext({ corr_id, http_status, route })`, which sets **tags on the current scope** (`Sentry.setTag`). In the browser there is a single shared scope, so these tags persist globally and attach to *subsequent, unrelated events* until overwritten.
+
+**Impact:** A failed request stamps `corr_id=A` / `http_status=500` / `route=/x` onto the global scope. A later, unrelated render error caught by `AppErrorBoundary` (which sets `route` but not `corr_id`/`http_status`) is then reported carrying the **stale** `corr_id=A` and `http_status=500`. This produces mislabeled events, wrong correlation IDs, and phantom HTTP statuses — directly undermining the ticket's triage goal. The mutation is also largely redundant: `reportError` already attaches `corr_id` (read from the request header) and auto-derives `http_status` per-event from axios errors via `buildTags`.
+
+**Fix:** Don't mutate the global scope from the interceptor. Either remove the `setSentryContext` call and rely on `reportError`'s per-event tagging, or, if you want the interceptor itself to report, capture inside an isolated scope:
+
+```typescript
+axios.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    Sentry.withScope((scope) => {
+      scope.setTag("corr_id", corrId);
+      scope.setTag("http_status", error.response?.status);
+      scope.setTag("route", getSentryRoute());
+      // optionally Sentry.captureException(error) here
     });
+    return Promise.reject(error);
   }
-  return { ...extras, ...(context.extra ?? {}) }; // caller wins
-};
-```
-
-### 2. Duplicated QueryClient + interceptor bootstrap across both `_app.tsx` files
-
-**[File: apps/creative-portal/pages/_app.tsx, apps/customer-portal/pages/_app.tsx]**
-**Function/Class:** `App` / module-scope
-**Severity:** medium
-**Problem:** Both files contain byte-identical code: (a) top-level `installAxiosCorrelationInterceptor()` call with the same comment, (b) ~40 lines of `QueryCache`/`MutationCache`/`QueryClient` wiring with `onError` → `reportError`, (c) the `<AppErrorBoundary componentName="...PortalApp">` wrapper. Only the `componentName` string differs.
-**Impact:** The whole point of the PR is consistent error tracking; divergence between the two apps here would silently break that consistency. Future tweaks (e.g., adding `operation`, changing `route` derivation to `router.pathname`) will need to be applied in two places.
-**Fix:** Move to a shared factory/hook in `@proofed/shared/utils`:
-
-```ts
-// packages/shared/utils/createAppQueryClient.ts
-export const createAppQueryClient = () => {
-  const queryCache = new QueryCache({
-    onError: (error, query) =>
-      reportError(error, { source: "react-query", queryKey: query.queryKey, route: getRoute() })
-  });
-  const mutationCache = new MutationCache({ /* ... */ });
-  return new QueryClient({ queryCache, mutationCache, defaultOptions: { /* ... */ } });
-};
-```
-
-And a shared `<AppShell portal="creative"|"customer">` or at minimum a shared `installAxiosCorrelationInterceptor` call at the shared entry point.
-
-### 3. Error boundary scope is too coarse — Layout / providers are outside it
-
-**[File: apps/creative-portal/pages/_app.tsx]**
-**Function/Class:** `App` (JSX tree)
-**Severity:** medium
-**Problem:** In creative-portal the boundary is wrapped deep inside providers: `<UserContextProvider><BulkActionsContextProvider><SidePanelContextProvider><TeamMembersContextProvider><ThemeProvider>...<FeaturesProvider><VerifyOnboarding><Layout><AppErrorBoundary>`. A throw in `FeaturesProvider`, `VerifyOnboarding`, `Layout`, `ModalQueue`, or any of the context providers will *escape the boundary* and crash the app without a fallback. In customer-portal the same issue exists — `ModalQueue` and `Toast` sit outside `AppErrorBoundary`.
-**Impact:** The PR description states "Catches render crashes, reports to Sentry with `source=error-boundary`", but any crash in provider/layout code will bypass the boundary and produce a blank page with no Sentry event (only the `_error.tsx` SSR fallback would catch SSR-time versions; CSR provider crashes hit the default React behaviour).
-**Fix:** Wrap at the outermost render node. Move `<AppErrorBoundary>` to be the top-level element inside each App's return statement:
-
-```tsx
-return (
-  <AppErrorBoundary componentName="CreativePortalApp">
-    <QueryClientProvider client={queryClient}>
-      <UserContextProvider ...>
-        {/* rest of tree */}
-      </UserContextProvider>
-    </QueryClientProvider>
-  </AppErrorBoundary>
 );
 ```
 
-Optionally add nested boundaries around known crash hotspots (Tiptap editor regions, OrderCreation flow) so a local failure doesn't blank the whole app.
+**Resolution (2026-06-18):**
 
-### 4. Axios interceptor spreads config, likely stripping `AxiosHeaders` prototype
+- ✅ **Response-error interceptor removed** in `packages/shared/utils/installAxiosCorrelationInterceptor.ts`. The request interceptor (which stamps `x-correlation-id`) is unchanged. The response side previously called `setSentryContext({ corr_id, http_status, route })` on every failure, mutating the global scope; that call is gone.
+- ✅ **Per-event tagging covers the same fields.** `reportError` (`packages/shared/utils/throwSentryError.ts:57,60-69,80`) already attaches `corr_id` (from the request header, forwarded by `createAppQueryClient`'s `QueryCache`/`MutationCache` onError), auto-derives `http_status` from axios errors, and includes `route` in extras — all scoped to the single event.
+- ✅ **Tests updated** (`installAxiosCorrelationInterceptor.test.ts`). Two response-interceptor tests removed. Added a regression guard asserting `Sentry.setTag` / `Sentry.setContext` are never called from the interceptor and that the response interceptor is no longer installed. 6/6 tests pass; lint + typecheck clean.
+- ℹ️ **Trade-off:** direct `axios.get/post` calls that bypass `reportError` (e.g., fire-and-forget calls outside react-query) lose the per-event `corr_id`/`http_status` tags they previously got from the global mutation. Missing tags on those events is strictly better than the wrong tags on subsequent unrelated events. If any such call needs Sentry context, it should be wrapped in `try/catch` + `reportError`.
 
-**[File: packages/shared/utils/installAxiosCorrelationInterceptor.ts]**
-**Function/Class:** `installAxiosCorrelationInterceptor` (request interceptor)
+### 3. "Zero console.error swallows remain in runtime app code" is inaccurate ✅ Resolved (2026-06-18)
+
+**[File: apps/creative-portal/components/organisms/NewOrderForm/partials/BriefStep/hooks.tsx]**
+
+**Function/Class:** support-document add handler (line ~300)
+
 **Severity:** medium
-**Problem:** The interceptor returns `{ ...config, headers: { ...headers, [CORRELATION_HEADER]: corrId } as typeof config.headers }`. In axios v1 `config.headers` is an `AxiosHeaders` *class instance*, not a plain object. Spreading it into `{}` produces a plain object missing `set`, `has`, `delete`, `getContentType`, etc. The `as typeof config.headers` cast silences the type error but leaves a real runtime hazard for any downstream interceptor (or axios internal) that calls `config.headers.set(...)`.
-**Impact:** Any code downstream of this interceptor that uses `AxiosHeaders` methods will throw `TypeError: config.headers.set is not a function`. The project pins `axios` at a v1 version so this is a real concern.
-**Fix:** Mutate headers via the SDK API instead of reconstructing the config:
 
-```ts
-axios.interceptors.request.use((config) => {
-  const existing = config.headers?.get?.(CORRELATION_HEADER);
-  const corrId = typeof existing === "string" && existing.length > 0
-    ? existing
-    : generateCorrelationId();
-  config.headers.set(CORRELATION_HEADER, corrId);
-  return config;
-});
+**Problem:** A swallowing `catch` still logs only to console:
+
+```typescript
+} catch (error) {
+  // eslint-disable-next-line no-console
+  console.error("Support document add failed", error);
+  showToast({ type: "error", text: "Failed to add support documents" });
+}
 ```
 
-Add a test that confirms `config.headers instanceof AxiosHeaders` after the interceptor runs (use a real axios request config, not a plain object mock).
+This is the creative-portal analogue of the customer-portal `useSupportDocuments` swallow that the PR **did** migrate (`source=supportDocuments`). The PR description claims "Zero `console.error` swallows remain in runtime app code."
 
-### 5. High-cardinality `route` tag from `window.location.pathname`
+**Impact:** Support-document add failures in the creative portal stay invisible to Sentry, and the same failure mode is tracked in one app but not the other — contradicting requirement 5 (consistent coverage) and the PR's own completeness claim.
 
-**[File: packages/shared/utils/installAxiosCorrelationInterceptor.ts, packages/shared/components/molecules/AppErrorBoundary/index.tsx, apps/\*/pages/_app.tsx]**
-**Function/Class:** response interceptor, `componentDidCatch`, QueryCache/MutationCache `onError`
-**Severity:** medium
-**Problem:** Three different files in this PR enrich the `route` field with `window.location.pathname`, which returns the concrete URL (e.g., `/orders/42`). For Sentry tag grouping you want the route template (`/orders/[id]`). Next's `router.pathname` or `router.route` provides this. In contrast, the new `_error.tsx` correctly uses `contextData.asPath`. The inconsistency means the same error on `/orders/42` and `/orders/43` will appear as two separate routes in Sentry dashboards, blowing out tag cardinality.
-**Impact:** Sentry tag cardinality quota issues; noisy dashboards; harder to aggregate errors by page.
-**Fix:** Standardize on `router.pathname` (template). Factor out a single `getSentryRoute()` util in `@proofed/shared/utils` and call it from all three places. Consider stamping both (`route` = template, `url` = full pathname) as separate fields — template as `tag`, instance as `extra`.
+**Fix:** Migrate this site to `reportError`:
 
-### 6. Error ID shown in `AppErrorBoundary` fallback but not in `ErrorPage`
+```typescript
+} catch (error) {
+  reportError(error, {
+    source: "supportDocuments",
+    operation: "onFilesAccepted",
+    route: getSentryRoute()
+  });
+  showToast({ type: "error", text: "Failed to add support documents" });
+}
+```
+
+**Resolution (2026-06-18):**
+
+- ✅ **Swallow migrated** in `apps/creative-portal/components/organisms/NewOrderForm/partials/BriefStep/hooks.tsx` (`onFilesAccepted` catch block). Tags match the customer-portal counterpart: `source: "supportDocuments"`, `operation: "onFilesAccepted"`, `route: getSentryRoute()`, plus `extra: { selectedOrderIndexesBrief, ordersCount }` so reviewers can tell whether the failure was on a single order, a selection, or the all-orders write.
+- ✅ **Repo-wide sweep clean.** `grep "console.error"` across `apps/` + `packages/shared` (excluding `*.test.*`, `__mocks__/`, the Sentry scrubber's own diagnostic logging, and `scripts/`) returns zero hits. The PR description's "Zero `console.error` swallows remain in runtime app code" is now actually accurate.
+- ✅ **Typecheck + lint pass** on the changed file. No new tests added — this is a behavioural migration of a catch block, matched to the customer-portal pattern that already has equivalent coverage.
+
+### 4. Axios request/response headers attached to extras aren't header-aware-scrubbed ✅ Resolved (2026-06-18)
+
+**[File: packages/shared/utils/throwSentryError.ts]**
+
+**Function/Class:** `buildExtras`
+
+**Severity:** low
+
+**Problem:** `extras.requestHeaders = error.config?.headers` and `extras.responseHeaders = error.response?.headers` are attached raw. They are only scrubbed later by the global `scrubSensitiveData` (key-substring match), which redacts `authorization`/`auth`/`token` but **not** `cookie` / `set-cookie` — those are handled exclusively by `scrubHeaderValues`, which `sentryScrubber` applies to `request.headers`/metadata, **not** to `extra.*`.
+
+**Impact:** In the browser this is largely moot (JS can't read `Set-Cookie`; the `Cookie` header isn't in `config.headers`). But `reportError` also runs on the SSR/server path (e.g. `tiptapAiChanges`, and any future server caller), where axios configs can carry forwarded cookies — those values could land unredacted in `extra.requestHeaders`.
+
+**Fix:** Either drop full header objects from extras (they're noisy), or run them through `scrubHeaderValues` / strip `cookie`/`set-cookie` before attaching.
+
+**Resolution (2026-06-18):**
+
+- ✅ **Scrub at the source.** Added `scrubHeadersForExtras` in `packages/shared/utils/throwSentryError.ts` — a two-pass helper that runs `scrubSensitiveData` (redacts whole header keys like `Authorization`/`apiKey`/`token`) and then `scrubHeaderValues` (parses the `cookie` header and redacts sensitive cookies). Both `extras.requestHeaders` and `extras.responseHeaders` go through it before being attached, so PII can't reach Sentry even on the SSR/server path where forwarded session cookies would otherwise land raw.
+- ✅ **`scrubHeaderValues` exported** from `packages/shared/utils/sentryScrubber.ts` so it can be reused at the call site. No behaviour change inside the scrubber itself.
+- ✅ **Tests added** in `throwSentryError.test.ts`: one asserting `Authorization`/`x-api-key` are `[REDACTED]` while non-sensitive headers (`Content-Type`, `x-request-id`) survive; one asserting `cookie: tracking=ok; session=...; theme=dark` is scrubbed to redact only `session`. 28/28 tests pass.
+- ℹ️ Defense in depth: `sentryScrubber.beforeSend` still re-scrubs `event.extra` recursively, so even if a future caller bypasses the helper the scrubber catches the obvious sensitive keys — the new helper just closes the cookie-parsing gap that `scrubSensitiveData` alone couldn't handle.
+
+### 5. Custom axios instance and SSR requests bypass the correlation interceptor ✅ Resolved (2026-06-18) — documented, no code fix
+
+**[File: packages/shared/utils/installAxiosCorrelationInterceptor.ts, apps/creative-portal/api/utils/tiptap/api.ts]**
+
+**Function/Class:** `installAxiosCorrelationInterceptor`
+
+**Severity:** low
+
+**Problem:** The interceptor patches only the global `axios` default and is a no-op during SSR (`typeof window === "undefined"`). `tiptapApiClient = axios.create(...)` is a separate instance, and `getServerSideProps`/API-route outbound calls run server-side — none receive the `x-correlation-id` header or the response-error handling.
+
+**Impact:** Requirement 2 (correlation ID on internal API requests) isn't covered for SSR-originated calls or custom-instance traffic. tiptap is third-party/server-side so this is mostly acceptable, but the gap should be acknowledged rather than implied-complete.
+
+**Fix:** Document the browser-only scope explicitly, and/or install the request interceptor on shared custom instances and the server axios path if SSR correlation is in scope.
+
+**Resolution (2026-06-18):**
+
+- ✅ **JSDoc on `installAxiosCorrelationInterceptor` expanded** with explicit "Scope" and "Out of scope" sections naming every uncovered path: custom axios instances (`axios.create()`), server-side outbound axios (`getServerSideProps`, API → API), and `fetch`/other HTTP clients. The interceptor's actual behaviour is unchanged.
+- ✅ **`tiptapApiClient` annotated** in `apps/creative-portal/api/utils/tiptap/api.ts` with a comment explaining it is intentionally unpatched — third-party tiptap.cloud endpoint, own auth header, doesn't propagate `x-correlation-id`. Errors from callers are already reported with `source: "tiptap-ai-changes"` via direct `reportError` calls (migrated in commit `fc6d94cc0`).
+- ℹ️ **Server-side outbound correlation NOT added** in this PR. The right fix there is request-scoped corr_id threading (read `req.headers["x-correlation-id"]` already surfaced by `withSentryUser`/`withApiMiddleware`, forward to outbound axios calls manually — or pull in AsyncLocalStorage). Both options are non-trivial design work and out of scope for PP-1750. The JSDoc now flags this gap so reviewers know to file a follow-up if SSR ↔ API correlation becomes a requirement.
+- 📋 **Inbound chain (frontend → API) is already complete** via existing code: this interceptor stamps `x-correlation-id` on outbound browser requests; `withSentryUser` (`packages/shared/api/utils/middlewares/withSentryUser.ts:27-34`) reads it back on the server and forwards into Sentry scope + response header. So Requirement 2 is satisfied for the dominant path — only SSR-originated outbound traffic is uncovered, and that's acknowledged rather than implied-complete.
+
+### 6. `ErrorPage.getInitialProps` route likely resolves to `/_error`
 
 **[File: packages/shared/components/pages/error/index.tsx]**
-**Function/Class:** `ErrorPage`
+
+**Function/Class:** `ErrorPage.getInitialProps`
+
 **Severity:** low
-**Problem:** `AppErrorBoundary` renders the Sentry event ID (`Error ID: ...`) for user-reported debugging, but the shared SSR `ErrorPage` does not — even though its `getInitialProps` calls `captureUnderscoreErrorException` which returns an event ID.
-**Impact:** Users hitting SSR errors cannot quote an event ID to support. Inconsistent UX between client-side boundary crashes and SSR-time crashes.
-**Fix:** Return the Sentry event id from `captureUnderscoreErrorException` via `getInitialProps`, thread it into `ErrorPageProps`, and display it:
 
-```ts
-ErrorPage.getInitialProps = async (contextData) => {
-  // ... existing setup
-  const errorId = await captureUnderscoreErrorException(contextData);
-  const next = await NextErrorComponent.getInitialProps(contextData);
-  return { ...next, errorId };
-};
-```
+**Problem:** `const route = contextData.pathname ?? contextData.asPath;` with a comment claiming `pathname` is the errored route's template. For the Pages-Router error page, `ctx.pathname` is typically `/_error`, so `route` would tag every SSR error as `/_error` rather than the real route template (`asPath` holds the concrete URL).
 
-### 7. Unsafe `as Error & { statusCode?: number }` cast in `ErrorPage.getInitialProps`
+**Impact:** The `route` tag/context on SSR-captured errors loses its grouping value. Low severity but worth a quick check against a real deployed SSR error.
 
-**[File: packages/shared/components/pages/error/index.tsx]**
-**Function/Class:** `getInitialProps`
+**Fix:** Verify the actual `contextData.pathname` value on a deployed SSR error; if it's `/_error`, prefer `contextData.asPath` (or derive the template another way).
+
+### 7. `getSentryRoute` fallback returns concrete pathname (tag cardinality) ✅ Resolved (2026-06-18)
+
+**[File: packages/shared/utils/getSentryRoute.ts]**
+
+**Function/Class:** `getSentryRoute`
+
 **Severity:** low
-**Problem:** Line 46: `(contextData.err as Error & { statusCode?: number }).statusCode`. Next.js types `err` as `Error | null | undefined`, but at runtime it can be a string or a plain object if thrown non-Error values bubble up. Accessing `.statusCode` on a string is fine (returns `undefined`), but the cast conveys false certainty.
-**Impact:** Minor — no runtime crash. Misleading for future edits.
-**Fix:** Narrow explicitly:
 
-```ts
-const errWithStatus = contextData.err as { statusCode?: number } | null;
-const statusCode = contextData.res?.statusCode ?? errWithStatus?.statusCode;
-```
+**Problem:** When the Next router isn't initialised it falls back to `window.location.pathname` (e.g. `/orders/42`). As a `reportError` *extra* this is fine, but `route` is also promoted to a **tag** via `setSentryContext` (interceptor + error boundary), and concrete paths inflate tag cardinality.
 
-### 8. `packages/shared/__mocks__/@sentry/nextjs.ts` is incomplete for the v10 API surface
+**Impact:** Minor Sentry tag-cardinality growth in the fallback case; the primary path correctly uses the route template.
 
-**[File: packages/shared/__mocks__/@sentry/nextjs.ts]**
-**Function/Class:** mock module
-**Severity:** medium
-**Problem:** The mock exports `captureException`, `captureUnderscoreErrorException`, `setTag`, `setContext`, and a `getCurrentScope` that returns an object with `getContext`/`setContext`/`setTag`. Missing: `withIsolationScope` (used by `withSentryUser.ts`), `replayIntegration`/`browserTracingIntegration` (used by `client.config.ts`), `getScopeData` (used by the rewritten `sentryContext.ts`). The mock's `getCurrentScope` still returns `getContext` (v7 API) instead of `getScopeData` (v8+).
-**Impact:** Tests that import modules touching the Sentry API may fall through to undefined methods and throw, or silently no-op. `sentryContext.test.ts` appears to patch its own mock — but any other test that imports from `packages/shared` and transitively touches Sentry is brittle.
-**Fix:** Expand the mock to mirror the v10 surface actually used:
+**Fix:** Acceptable as-is; optionally only use the concrete path for an extra and avoid tagging it.
 
-```ts
-export const withIsolationScope = (fn: (scope: any) => unknown) => fn({ setTag: () => {}, setContext: () => {}, setUser: () => {} });
-export const replayIntegration = () => ({ name: "Replay" });
-export const browserTracingIntegration = () => ({ name: "BrowserTracing" });
-export const getCurrentScope = () => ({
-  getScopeData: () => ({ contexts: {} }),
-  setContext: () => {},
-  setTag: () => {}
-});
-```
+**Resolution (2026-06-18):**
 
-### 9. No test coverage for `runWithAsyncContext` → `withIsolationScope` migration
+- ✅ **Concrete-pathname fallback removed** in `packages/shared/utils/getSentryRoute.ts`. The function now returns `undefined` when no route template is available (Next router not initialised, pathname is `/_error`, etc.) instead of returning `window.location.pathname`. Updated JSDoc explains why and notes the route template is the only "tag-safe" value.
+- ✅ **Tag-promotion sites stay clean automatically.** `setSentryContext` (`sentryContext.ts:51-53`) already ignores `undefined` fields, so `setTags({ route: undefined })` is a no-op — the high-cardinality concrete path never reaches the tag set. `AppErrorBoundary` and `ErrorPage` (the only remaining callers that promote `route` to a tag after Issue 2's interceptor removal) needed no changes.
+- ✅ **Extras-only callers are unaffected.** `createAppQueryClient`, `useSupportDocuments` (both portals), `BriefStep/hooks.tsx`, `JobCard.tsx`, etc. all forward `route` as a `reportError` extra; the `buildExtras` builder simply skips undefined.
+- ✅ **Two tests updated** in `getSentryRoute.test.ts`: the "fallback to window.location.pathname" and "/_error" cases now assert `undefined` (renamed to call out the tag-cardinality reason). 5/5 tests pass. Full shared suite stays green (1306/1306).
+- ℹ️ **What's lost:** the concrete URL as a `reportError` extra in the router-not-ready edge case. Sentry's automatic browser instrumentation (`request.url`, `transaction.name`, navigation breadcrumbs) still captures the concrete URL on each event, so triage information isn't lost — just consolidated to the SDK-provided fields.
+- 🧹 **Side fix:** the same edit pass restored `_hint?: EventHint` / `_hint?: BreadcrumbHint` parameters that an earlier linter run had over-pruned from `sentryScrubber` and `beforeBreadcrumb` (Sentry's API expects 2-arg callbacks; tests pass two). Now both match the Sentry signature again.
 
-**[File: packages/shared/api/utils/middlewares/withSentryUser.ts]**
-**Function/Class:** `withSentryUser`
-**Severity:** medium
-**Problem:** The Sentry v7→v10 migration replaced `runWithAsyncContext` (shared scope across nested awaits) with `withIsolationScope` (isolated scope per invocation). These have different cross-async-boundary semantics: child Sentry captures from inside a deeply-nested await inside an API route will now see the fresh isolation scope rather than the parent scope.
-**Impact:** Any API route that relies on tag/context propagation from an outer middleware into a deeply-nested library call may silently lose tags in production. Not covered by tests.
-**Fix:** Add an integration test that invokes `withSentryUser` with a nested-async handler and asserts that `setTag`/`setContext` calls inside the nested handler land on the same scope as the outer middleware. If the semantics changed in ways that affect us, compensate (e.g., re-apply the parent scope inside the handler).
+---
 
-### 10. `installAxiosCorrelationInterceptor()` called at module top-level of `_app.tsx`
+## Validation Checks
 
-**[File: apps/creative-portal/pages/_app.tsx:56, apps/customer-portal/pages/_app.tsx:41]**
-**Function/Class:** module scope
-**Severity:** low
-**Problem:** Side-effectful module-scope call. The util has a `typeof window === "undefined"` guard, so it no-ops during SSR — fine in practice. But in dev with HMR the module can re-evaluate; the `isInstalled` flag prevents double-install, though that same flag also prevents re-install across a full page reload in dev when the module is retained across hot reloads with mocked axios instances.
-**Impact:** Brittle, not testable without a reset helper (which is why `resetAxiosCorrelationInterceptorForTests` exists). Running this inside `useEffect` of the App component would be more conventional and avoids module-scope side effects during SSR module evaluation.
-**Fix:** Move to `useEffect(() => { installAxiosCorrelationInterceptor(); }, []);` inside the App component. Keep the `isInstalled` idempotency flag as a safety net.
+| Check | Result | Notes |
+|---|---|---|
+| `vitest run` on `@proofed/shared` (full suite) | ✅ 1306/1306 pass | Run after the Issue 7 / Issue 4 edits; confirms no regression from the scrubber/getSentryRoute changes. |
+| `tsc --noEmit` on `@proofed/shared` | ✅ Clean | Run after every issue's edit. |
+| `tsc --noEmit` on `@proofed/creative-portal` | ✅ Clean | Run after Issues 3, 5, 7. |
+| `tsc --noEmit` on `@proofed/customer-portal` | ✅ Clean | Run after Issue 7 (cross-app `getSentryRoute` signature change). |
+| `eslint --max-warnings 0` on every touched file | ✅ Clean | Applied iteratively; lint-staged also ran via pre-commit hook. |
+| `npx turbo run build` (full branch) | ⏭️ Not run this session | Re-run on devtest deploy — required by CLAUDE.md before merge, especially important given the SDK v7→v10 upgrade. |
+| Runtime test plan (5 PR-body checkboxes) | ⏭️ Pending | Must walk through on devtest/stage; `/sentry-test` dev page covers 4/5. |
 
-### 11. Stale `/* eslint-disable no-console */` in rewritten `sentryContext.ts`
-
-**[File: packages/shared/utils/sentryContext.ts:1]**
-**Function/Class:** file header
-**Severity:** low
-**Problem:** The file no longer uses `console.*` (the pre-existing `console.warn` fallbacks were removed in the v10 API rewrite). The `eslint-disable no-console` directive at the top is now dead code.
-**Impact:** Cosmetic; future additions of `console.log` would silently pass lint.
-**Fix:** Delete line 1.
-
-### 12. `@sentry/nextjs` uses `^10.48.0` while neighbouring deps are pinned
-
-**[File: apps/creative-portal/package.json, apps/customer-portal/package.json]**
-**Function/Class:** dependencies
-**Severity:** low
-**Problem:** The project convention (per CLAUDE.md and existing `package.json` entries) is exact-version pinning. This PR introduces `"@sentry/nextjs": "^10.48.0"` — a caret range that will silently pull minor + patch updates of a freshly-upgraded SDK on next `yarn install`.
-**Impact:** Reviewers can't tell from the diff whether a later CI run will exercise the exact same SDK version; the lockfile is authoritative only until someone regenerates it.
-**Fix:** Pin to an exact version for consistency: `"@sentry/nextjs": "10.48.0"`.
-
-### 13. No test for `reportError` with non-Error primitive inputs
-
-**[File: packages/shared/utils/throwSentryError.test.ts]**
-**Function/Class:** test suite
-**Severity:** low
-**Problem:** `QueryCache.onError` typings treat `error` as `unknown`. `reportError` is called with that unknown value. No test covers `reportError(null)`, `reportError("string")`, `reportError(undefined)`, or `reportError({})`. Sentry's `captureException` accepts unknown but serializes primitives/plain objects differently than Errors.
-**Impact:** If a network layer rejects with a plain object (common with some libs), the reported event may lack a useful message. No regression cover for this.
-**Fix:** Add tests for `reportError` with `null`, `undefined`, primitive string, plain object — assert the event is still captured and `extra`/`tags` are set.
-
-### 14. No direct test for `_app.tsx` QueryCache/MutationCache wiring
-
-**[File: apps/\*/pages/_app.tsx]**
-**Function/Class:** QueryClient factory
-**Severity:** low
-**Problem:** The `QueryCache`/`MutationCache` `onError` handlers are non-trivial inline functions that dereference `mutation.options.mutationKey` and `query.queryKey`. If Tanstack Query ships a breaking change to the `mutation.options` shape, this breaks silently in production and only shows up as "missing mutationKey" in Sentry events.
-**Impact:** Core error-reporting path has no regression test.
-**Fix:** Either extract the factory (see issue #2) and unit-test it, or add a Vitest test that renders `<App>` and triggers a failing mutation to assert `reportError` is called with the expected context.
+> The scoped validation above covers the **review fixes** (commit `716ae6719`). The whole-branch `turbo run build` and the runtime test plan still need to run on a deployed devtest before merge, per CLAUDE.md.
 
 ---
 
 ## Tests
 
-- ✅ `throwSentryError`: 9 new tests cover tags, extras, truncation, axios merge, user extras, returns event id.
-- ✅ `AppErrorBoundary`: 5 tests cover children, fallback UI, custom fallback, Sentry report, event id render.
-- ✅ `ErrorPage`: 6 tests cover status code, generic message, getInitialProps scope enrichment.
-- ✅ `installAxiosCorrelationInterceptor`: 7 tests cover install idempotency, header stamping, caller-id passthrough, missing headers, scope push, missing `error.config`.
-- ✅ `getSentryTracesSampleRate`: 5 tests cover devtest / stage / production / default / undefined.
-- ❌ No test for `reportError` with non-Error primitives (issue #13).
-- ❌ No test for `withSentryUser`'s `withIsolationScope` migration (issue #9).
-- ❌ No test for `_app.tsx` QueryCache/MutationCache wiring (issue #14).
-- ❌ No test asserting `AxiosHeaders` instance preservation through the interceptor (issue #4).
-- ❌ No test asserting the `SENSITIVE_FIELDS` scrubber still redacts auth/token substrings after the scrubber cleanup (regression sentinel for future edits).
+- ✅ 9 new test files added by the PR itself (~1,520 lines): `throwSentryError` (564), `ErrorPage` (214), `withSentryUser` (165), `baseInit` (131), `installAxiosCorrelationInterceptor` (128), `createAppQueryClient` (119), `AppErrorBoundary` (110), `getSentryRoute` (66), `keys` (25). Strictly **8 new** files + the expanded `throwSentryError.test.ts` (was modified, not new) — the original review wording was slightly off and is corrected here.
+- ✅ `__mocks__/@sentry/nextjs.ts` updated to the v10 surface (`withIsolationScope`, `getCurrentScope().getScopeData`, `captureUnderscoreErrorException`, functional integrations) — consistent with the upgrade.
+- ✅ Meets the project rule that new code ships with tests, for the new shared utilities.
+- ✅ **Review-fix tests added 2026-06-18** (commit `716ae6719`):
+  - `throwSentryError.test.ts` — +2 cases: header keys (`Authorization`, `x-api-key`) redact to `[REDACTED]` while neutral keys (`Content-Type`, `x-request-id`) survive; cookie-string parsing redacts only the sensitive cookie (`session=...`) inside `cookie: tracking=ok; session=...; theme=dark`.
+  - `installAxiosCorrelationInterceptor.test.ts` — −2 cases removed (response-interceptor tests for the now-deleted handler), +2 added including a regression guard asserting the interceptor never calls `Sentry.setTag`/`setContext`.
+  - `getSentryRoute.test.ts` — 2 cases updated to assert `undefined` on the router-not-ready and `/_error` paths (was: concrete `window.location.pathname`).
+  - Full `@proofed/shared` suite: 1306/1306 pass.
+- ⚠️ No regression test asserts that the migrated swallow sites (tiptapAiChanges, serializerUtils, JobCard, notifications, OrderTemplates, teamMembersContext, useSupportDocuments, BriefStep) now call `reportError` — these behavioural migrations are unverified by tests.
+- ⚠️ The five **runtime** verification items in the PR test plan are all unchecked. The `/sentry-test` dev page (commit `c3cc2397b`) covers items 1–4; item 5 (corr_id cross-reference Sentry ↔ Logtail) needs a deployed env.
 
 ---
 
@@ -360,33 +253,30 @@ export const getCurrentScope = () => ({
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ Extras overwrite (#1), route cardinality (#5), and error ID parity (#6) fixed. ⚠️ Axios spread (#4) safe today but must be fixed before PR #2261 (axios 1.x) merges — see Blocking follow-up. |
-| Regression risk | ✅ Low — `withIsolationScope` covered by new integration-ish test (#9); v10 API mock surface expanded (#8); primitive `reportError` paths hardened + tested |
-| Tests | ✅ 1008 tests passing in shared workspace; 32 original + 18 new tests covering all review gaps |
-| Code quality | ✅ `_app.tsx` duplication eliminated via shared factory (#2); boundary scope widened (#3); stale directives removed (#11) |
-| Mergeable state | ✅ Up-to-date with `develop` via merge commit `d22331582` |
+| Correctness | ✅ Resolved — Issues 1, 2, 3, 4, 5, 7 all fixed 2026-06-18 in commit `716ae6719` |
+| Regression risk | ⚠️ Low/medium — Sentry v7→v10 upgrade now disclosed in the PR + CLAUDE.md (Issue 1); runtime test plan still pending on devtest/stage |
+| Tests | ✅ Strong unit coverage for new utils + 5 regression-guard cases added with the fixes; migrations remain unverified at runtime |
+| Code quality | ✅ Good — clean layering, reuse-first, thoughtful PII handling; review fixes preserved the same style |
+| Validation suite | ✅ Scoped (typecheck/lint/test on touched files + full `@proofed/shared` suite) clean. ⏭️ Whole-branch `turbo run build` still owed. |
+| Open issues | ⚠️ Issue 6 (`ErrorPage.getInitialProps` route may resolve to `/_error`) still open — flagged as "verify on real deployed SSR error," low severity. |
+| Mergeable state | ✅ Clean (GitHub); branch has 1 unpushed commit (`716ae6719`). Runtime test plan + whole-branch build still required before merge. |
 
 ---
 
 ## Recommendation
 
-**Approve after rebase** — 11 of the 12 valid review points are addressed on the branch; #4 is deferred to the PR #2261 coordination window (see Blocking follow-up). Point #12 (caret pinning) remains invalid against actual repo state.
+Original verdict was **request changes**. After the 2026-06-18 fix pass (commit `716ae6719`) the substantive code defects are resolved; what remains is one low-severity verification item and the standard pre-merge checks.
 
-### Remaining before merge
+1. ~~**Fix the PR description and `CLAUDE.md`** to reflect the actual `@sentry/nextjs` 7.73.0 → 10.48.0 upgrade; remove it from "deferred."~~ ✅ Done 2026-06-18 — PR description rewritten + `CLAUDE.md` updated. Still owed: complete the runtime test plan on a deployed env and confirm tunnelRoute/sourcemap upload (Issue 1).
+2. ~~**Remove the global `setSentryContext` mutation** from the axios response interceptor (or scope it with `withScope`) to stop cross-event context bleed (Issue 2).~~ ✅ Done 2026-06-18 — response-error interceptor removed entirely; per-event tagging via `reportError` covers the same fields; test suite updated with a regression guard.
+3. ~~**Migrate the remaining swallow** in `NewOrderForm/partials/BriefStep/hooks.tsx` so creative/customer portals are consistent (Issue 3).~~ ✅ Done 2026-06-18 — migrated to `reportError` with matching tags; repo-wide sweep confirms zero `console.error` swallows remain in runtime code.
+4. **Run the mandatory whole-branch validation suite** before merge — `yarn install` first (deps changed), then `npx turbo run test / typecheck / lint / build`. Required by CLAUDE.md. Scoped checks ran clean during the fix pass but the full pipeline still needs to execute.
+5. *(Optional / low)* ~~Scrub or drop header objects in extras (Issue 4);~~ ✅ Done 2026-06-18. ~~document the interceptor's browser-only scope (Issue 5);~~ ✅ Done 2026-06-18 — JSDoc expanded with Scope / Out-of-scope sections; `tiptapApiClient` annotated. **Verify the SSR `route` value on a real deployed error (Issue 6 — still open).** ~~Kill the concrete-path fallback in `getSentryRoute` (Issue 7).~~ ✅ Done 2026-06-18 — fallback now returns `undefined`; `setSentryContext` skips the tag automatically.
 
-1. ~~Rebase against `develop`~~ ✅ Done — `develop` merged in via commit `d22331582` (merge commit rather than rebase, but both resolve the dirty state).
-2. ~~Remove the `/sentry-test` page~~ ✅ Done — reverted so the PR ships only the permanent error-tracking infra.
+---
 
-No outstanding blockers before merge.
+## Fix commit & related notes
 
-### Remaining before PR #2261 (axios 1.x) merges
-
-3. **Update `installAxiosCorrelationInterceptor` to mutate headers via `AxiosHeaders.set()` instead of spreading** — see Blocking follow-up above. Can land on this PR (PP-1750) as a follow-up commit, or be folded into PR #2261's migration. Must exist before axios 1.15.0 reaches `develop`.
-
-### Also landed as post-review hardening
-
-- `reportError` now wraps non-Error values (`null`, strings, plain objects) in a synthetic `Error` with a descriptive message and the raw value tucked under `extra.originalValue`, so Sentry stops collapsing every primitive into a single `<unknown>` group.
-
-Optional follow-ups (out of scope for this PR):
-
-- Consider splitting the Sentry v7→v10 SDK upgrade into its own PR in future if similar cross-cutting infra work arises; the current bundled approach is now well-tested.
+- **Commit:** `716ae6719` — `PP-1750: Address PR review — fix scope mutation, headers, route cardinality` — 12 files changed, +220 / −81. Local-only; not yet pushed to `origin/fix/PP-1750-improve-error-tracking`.
+- **One unrelated file swept in:** `packages/shared/config/sentry/client.config.ts` carried a pre-existing working-tree change that removed `googletagmanager`/`hotjar`/`stripe` from `THIRD_PARTY_DENY_URLS`. The reviewer attempted to unstage it before commit, but lint-staged's processing pipeline re-included it. Unrelated to any of the seven review issues; either intentional (then keep) or accidental (then amend the commit to restore those three regex patterns). Flagged to the PR author for a decision.
+- **Review-doc location:** `pr-reviews/PR-2253-PP-1750-improve-error-tracking.md` (this file) is gitignored — these resolution annotations are local-only and won't ship with the PR. If reviewers elsewhere need them, copy/paste the relevant Resolution blocks into the PR conversation.
