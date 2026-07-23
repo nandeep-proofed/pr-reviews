@@ -6,11 +6,30 @@
 
 ---
 
+## ✅ Resolution update (2026-07-23)
+
+**All four issues are resolved.** The branch was merged with current `develop` and the follow-up findings were addressed.
+
+| # | Severity | Issue | Status | Fixed in |
+|---|---|---|---|---|
+| 1 | high | Stale base removes `onlyUpdate`/`jobDescription` PP-1938 needs | ✅ Resolved | merge `1516cb6d4` |
+| 2 | medium | Non-atomic delete+recreate fails the assign/accept endpoint | ✅ Resolved | `41a6247b2` |
+| 3 | low | `convertDocument` runs twice per heal | ✅ Resolved | `41a6247b2` |
+| 4 | low | Unconditional Sentry alert on empty content | ✅ Resolved | `41a6247b2` |
+
+**Validation after the fixes:** `typecheck` clean · `eslint` clean · full creative-portal suite **2078 passed** (+4 new tests covering the delete-failure / 404 / recreate-failure paths and the update-path Sentry gating). PR now reports `mergeable: MERGEABLE` / `mergeStateStatus: CLEAN`.
+
+Per-issue detail is inline in the **Issues Found** section below.
+
+---
+
 ## TL;DR
 
 The actual bug fix is **correct, well-reasoned, and well-tested**. The root-cause analysis (JSON PATCH `updateDocument` merges rather than replaces, so the follow-up content never landed in the persisted Y.JS binary) is confirmed by the tiptap API layer — `createDocument` POSTs (`?format=json`, sets), `updateDocument` PATCHes (`?format=json`, merges).
 
-However, the PR is **based on a stale `develop`** (its base is `5ccc1b5c7`, before PP-1938 merged). PP-1938 (#2367) rewrote the exact same function **and** added a new caller (`overlayPostEditAiChanges.ts`) that depends on the two parameters this PR deletes (`onlyUpdate`, `jobDescription`). GitHub reports `mergeable_state: dirty`. This is a hard blocker: the PR must be rebased onto current `develop` and re-reviewed, because a naive merge would either fail to compile or silently break the AI post-edit overlay feature.
+However, the PR was **based on a stale `develop`** (its base is `5ccc1b5c7`, before PP-1938 merged). PP-1938 (#2367) rewrote the exact same function **and** added a new caller (`overlayPostEditAiChanges.ts`) that depends on the two parameters this PR deletes (`onlyUpdate`, `jobDescription`). GitHub reported `mergeable_state: dirty`, which was a hard blocker.
+
+> **Update (2026-07-23):** This has since been resolved — `develop` was merged in and reconciled with PP-1938 (the `onlyUpdate` update path is kept), and the three follow-up findings below were fixed. See the **Resolution update** section above. GitHub now reports `MERGEABLE` / `CLEAN`.
 
 ---
 
@@ -44,7 +63,9 @@ The problem is **not the logic in isolation — it is that the same function was
 
 ## Issues Found
 
-### 1. Stale base — deletes `onlyUpdate` / `jobDescription` that PP-1938's `overlayPostEditAiChanges` depends on
+### 1. Stale base — deletes `onlyUpdate` / `jobDescription` that PP-1938's `overlayPostEditAiChanges` depends on — ✅ RESOLVED (merge `1516cb6d4`)
+
+> **Resolution:** `develop` was merged into the branch and reconciled with PP-1938 exactly as prescribed below. `decodeBlockFormatContent` and the `jobDescription` threading are preserved; the `onlyUpdate` update path (incl. `updateOrderDocumentWithAiChangesWithPositions`) is restored. `typecheck`/`build`/`test` pass and the predicted test-file conflicts did **not** materialize — `createOrderDocumentInTiptapFromBlocksFormat.test.ts` auto-merged cleanly and `overlayPostEditAiChanges.test.ts` (8 tests) passes. GitHub now reports `mergeable: MERGEABLE`.
 
 **[File: apps/creative-portal/api/utils/wysiwyg/createOrderDocumentInTiptapFromBlocksFormat.ts]**
 
@@ -77,7 +98,9 @@ This PR **removes both `onlyUpdate` and `jobDescription`** from the props and **
 
 ---
 
-### 2. Self-heal delete + recreate is non-atomic and surfaces as an endpoint failure
+### 2. Self-heal delete + recreate is non-atomic and surfaces as an endpoint failure — ✅ RESOLVED (`41a6247b2`)
+
+> **Resolution:** The heal's `deleteDocument` + recreate is now wrapped in a try/catch that reports to Sentry (`operation: "wysiwyg.heal-empty-doc"`) and **swallows**, so a transient tiptap failure degrades to the next-open retry instead of failing job assignment (`patchJob`) or candidate creation (`createJobCandidate`). A **404 from `deleteDocument`** is treated as success (doc already gone = desired post-state) so the recreate still runs. New tests cover the non-404 delete error, the 404-tolerance path, and the recreate-throws path.
 
 **[File: apps/creative-portal/api/utils/wysiwyg/createOrderDocumentInTiptapFromBlocksFormat.ts]**
 
@@ -114,7 +137,9 @@ At minimum, treat a 404 from `deleteDocument` as success (the doc being gone is 
 
 ---
 
-### 3. `convertDocument` runs twice per heal (redundant work)
+### 3. `convertDocument` runs twice per heal (redundant work) — ✅ RESOLVED (`41a6247b2`)
+
+> **Resolution:** Extracted `seedOrderDocumentFromBuiltJson(...)`, which accepts the already-built `{ workItemContentBlocks, idMapping, json }` payload. The heal converts **once** for its emptiness pre-check and passes that same payload straight to the seed step — no second decode / id-mapping / `convertDocument`. The public `createOrderDocumentInTiptapFromBlocksFormat` is now a thin build-then-seed wrapper, so its behaviour is unchanged.
 
 **[File: apps/creative-portal/api/utils/wysiwyg/createOrderDocumentInTiptapFromBlocksFormat.ts]**
 
@@ -130,7 +155,9 @@ At minimum, treat a 404 from `deleteDocument` as success (the doc being gone is 
 
 ---
 
-### 4. Empty-content Sentry alert fires for any genuinely-empty converted doc
+### 4. Empty-content Sentry alert fires for any genuinely-empty converted doc — ✅ RESOLVED (`41a6247b2`)
+
+> **Resolution:** The empty-content `reportError` (Sentry) now fires on the **create path only** (`!onlyUpdate`). The post-edit overlay update path (PP-1938) can legitimately be handed an empty payload, so it logs a `log.warn` without paging. A test asserts no `wysiwyg.empty-yjs-content` alert is raised when `onlyUpdate` is true. The whitespace-only classification in `nodeHasMeaningfulContent` is left as-is (accepted consciously — a whitespace-only doc is effectively empty).
 
 **[File: apps/creative-portal/api/utils/wysiwyg/createOrderDocumentInTiptapFromBlocksFormat.ts]**
 
@@ -148,6 +175,8 @@ At minimum, treat a 404 from `deleteDocument` as success (the doc being gone is 
 
 ## Validation Checks
 
+**Original review (stale base):**
+
 | Check | Result | Notes |
 |---|---|---|
 | `npx turbo run test` | ⏭️ Skipped | Skipped — user opted out. (PR self-reports 1806 passing on its stale base.) |
@@ -155,7 +184,15 @@ At minimum, treat a 404 from `deleteDocument` as success (the doc being gone is 
 | `npx turbo run lint` | ⏭️ Skipped | Skipped — user opted out. |
 | `npx turbo run build` | ⏭️ Skipped | Skipped — user opted out. **Expected to FAIL after rebase** (same cause as typecheck). |
 
-> Validation was intentionally not run. On the isolated (stale) PR branch it would very likely pass — a false negative, because the breakage only manifests after merging with PP-1938. Re-run all four **after** rebasing onto `develop`.
+**After merge + fixes (2026-07-23):**
+
+| Check | Result | Notes |
+|---|---|---|
+| creative-portal `test` | ✅ Pass | **2078 passed** (232 files), incl. the 22 `createOrder...` tests + 8 `overlayPostEditAiChanges` tests |
+| creative-portal `typecheck` | ✅ Pass | `tsc --noEmit` clean — the predicted `TS2353` is gone (Issue 1 resolved) |
+| `eslint` (changed files) | ✅ Pass | clean after prettier auto-fix |
+
+> The Issue 1 prediction (typecheck/build fail after merge; test files conflict) was correct as a *risk* but did not occur in practice, because the merge reconciled with PP-1938 rather than overwriting it — the update path was kept, so no excess-props error, and the test files auto-merged.
 
 ---
 
@@ -164,32 +201,35 @@ At minimum, treat a 404 from `deleteDocument` as success (the doc being gone is 
 - ✅ Strong new unit coverage on the fix itself: seeds `createDocument` with real content; does **not** create the empty placeholder; does **not** issue a separate `updateDocument`; creates the initial version; delegates to the AI-changes path when changes exist.
 - ✅ Heal coverage: deletes placeholder + rebuilds from source; leaves a doc with real content alone; leaves an image-only (non-text) doc alone; still heals a childless paragraph carrying a `text-align` attr; skips + reports when the rebuild source is also empty (no churn).
 - ✅ New `saveYjsVersionAsWorkItemContent.test.ts`: persists `yjs` (+ `yjsOriginal` for SERVICE), warns on empty payload, logs + `reportError` + rethrows on failure.
-- ⚠️ No test for the **non-atomic delete failure** (Issue 2) — e.g. `deleteDocument` rejecting, or `createDocument` failing after a successful delete.
-- ⚠️ The two edited test files also conflict with `develop` (base imports `decodeBlockFormatContent`); they must be reconciled during the rebase, and the mocks re-verified against PP-1938's shape.
-- ⏭️ Full suite not executed (user opted out) — re-run after rebase.
+- ✅ **Delete-failure coverage added** (Issue 2): heal does not throw on a non-404 `deleteDocument` error (degrades to next-open retry); tolerates a 404 and still recreates; does not throw when the recreate itself fails.
+- ✅ **Update-path Sentry gating covered** (Issue 4): no `wysiwyg.empty-yjs-content` alert when `onlyUpdate` is true.
+- ✅ The edited test files did **not** end up conflicting on merge — they auto-merged cleanly and the mocks were verified against PP-1938's shape (`overlayPostEditAiChanges.test.ts` green).
+- ✅ Full creative-portal suite executed after the fixes: **2078 passed**.
 
 ---
 
 ## Summary
 
-| Aspect | Status |
+| Aspect | Status (original → now) |
 |---|---|
-| Correctness | ⚠️ Correct on its own base, but semantically incompatible with current `develop` (removes an update path PP-1938 needs) |
-| Regression risk | ❌ High — breaks the PP-1938 AI post-edit overlay after merge (compile + behavioural) |
-| Tests | ✅ Good coverage of the fix; ⚠️ missing delete-failure case + test files conflict on rebase |
+| Correctness | ⚠️ → ✅ Merged with `develop`; update path PP-1938 needs is preserved |
+| Regression risk | ❌ High → ✅ Resolved — post-edit overlay compiles and its 8 tests pass |
+| Tests | ✅ Good coverage → ✅ + delete-failure/404/recreate-failure + update-path gating cases (2078 pass) |
 | Code quality | ✅ Clean, well-commented, thoughtful emptiness/churn guards |
-| Validation suite | ⏭️ Skipped — user opted out |
-| Mergeable state | ❌ Dirty (`mergeable_state: dirty`; PP-1938 not in branch, confirmed via `git merge-base`) |
+| Validation suite | ⏭️ Skipped → ✅ typecheck + lint + full creative-portal suite pass |
+| Mergeable state | ❌ Dirty → ✅ `MERGEABLE` / `CLEAN` |
 
 ---
 
 ## Recommendation
 
-**Request changes.**
+**Original: Request changes.** → **Now: all points addressed** (merge `1516cb6d4` + `41a6247b2`).
 
-1. **Blocker — rebase onto current `develop` and reconcile with PP-1938** (Issue 1). Preserve `decodeBlockFormatContent` + `jobDescription` threading, and **keep the `onlyUpdate` update path** that `overlayPostEditAiChanges` depends on. Scope the PP-2018 fix to (a) the no-AI-changes *create* branch and (b) the `…FromJobIfNotExist` self-heal — it does not require removing the update path.
-2. **Re-run the validation suite after the rebase** (`test` / `typecheck` / `lint` / `build`). Validation was skipped for this review and would be a false negative on the stale branch; typecheck/build are expected to fail pre-rebase.
-3. **Harden the self-heal** (Issue 2): wrap delete + recreate so a heal failure degrades to the next-open retry instead of failing the assign/accept endpoint, and tolerate 404-on-delete.
-4. **Nice-to-have:** avoid the double `convertDocument` on the heal path (Issue 3); reconsider the unconditional Sentry `reportError` on empty content (Issue 4); add a test for the delete-failure path.
+1. ✅ **Blocker resolved** — merged onto current `develop` and reconciled with PP-1938 (Issue 1): `decodeBlockFormatContent` + `jobDescription` threading preserved, `onlyUpdate` update path kept.
+2. ✅ **Validation re-run** — `typecheck` / `lint` / full creative-portal `test` (2078) all pass.
+3. ✅ **Self-heal hardened** (Issue 2) — delete + recreate degrades to next-open retry instead of failing the assign/accept endpoint, and tolerates 404-on-delete.
+4. ✅ **Nice-to-haves done** — double `convertDocument` removed (Issue 3); Sentry `reportError` gated to the create path (Issue 4); delete-failure tests added.
 
-The underlying fix is sound and the diagnostics satisfy the ticket — this is a "correct change on the wrong base," not a wrong change. Once rebased and re-validated, it should be close to approvable.
+The underlying fix was sound; it was a "correct change on the wrong base." Now rebased-via-merge, re-validated, and the follow-up findings addressed — **ready for re-review / approval.**
+
+Remaining reviewer judgment call (non-blocking): on a recreate failure the heal reports to Sentry twice — inner `wysiwyg.create-order-document` (what failed) + outer `wysiwyg.heal-empty-doc` (heal context). Kept deliberately for triage context; trivial to collapse to one if the team prefers.
