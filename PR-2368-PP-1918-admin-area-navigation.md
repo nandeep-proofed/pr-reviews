@@ -14,6 +14,18 @@
 
 ---
 
+## What this means for users (non-technical summary)
+
+The new navigation works well on a normal desktop screen. The problems show up around the edges:
+
+1. **On a phone or a narrow window, the admin area becomes unusable.** The check that is supposed to keep the side bar off small screens doesn't actually work — it always says "this is a desktop". Tapping the menu icon slides a 255px panel over most of the screen *and* pushes the page content sideways, so the order table is squeezed into a thin strip with no way to close the panel except the button now hidden underneath it.
+2. **Reload an admin sub-page and the navigation disappears.** Open a partner's project settings from within the app and everything is fine. Press F5, or open that same link from a bookmark, and the admin side bar vanishes and the top bar switches to the creative-side links — same URL, completely different navigation.
+3. **The side bar animates itself shut on every page load.** If you collapsed it, each new page paints it open first and then visibly slides it closed, dragging the page content with it. The code was written to prevent exactly this; the guard doesn't fire in time.
+4. **Your collapse choice is forgotten when you close the browser** (the width is remembered, so you come back to an expanded *and* wider side bar than you left).
+5. **Two changes reach screens this ticket never mentioned:** the profile avatar and the logo are now smaller for everyone — including editors and reviewers who never open the Admin Area, and on the login screen — and the search box's close (X) button has disappeared, which removes the only way to dismiss the search results without a mouse.
+
+---
+
 ## Jira Requirements vs Implementation
 
 | Jira Requirement | PR Implementation | Status |
@@ -63,13 +75,23 @@ Three structural weaknesses run through the issues below:
 
 **[File: apps/creative-portal/components/organisms/Header/index.tsx]**
 
+> **In plain terms:** The side bar is designed for desktop, and there is a check meant to keep it off small screens. That check is a placeholder that always answers "yes, this is a desktop". So on a phone the menu button appears, and tapping it covers most of the screen with the nav panel while also shoving the page content sideways — leaving the order table in a thin unusable strip, with the button that would close it now hidden behind the panel.
+
 **Function/Class:** Header (toggle render) / MainLayout (SideNav mount)
 
 **Severity:** high
 
+**Steps to reproduce:**
+
+1. Log in as an admin and open `/orders`.
+2. Resize the browser to ~375px wide, or open the page on a phone.
+3. **Expected:** no side bar and no menu toggle at this width — the ticket scopes the side bar to desktop, with auto-collapse below 1280px.
+4. **Actual:** the hamburger renders. Tap it.
+5. **Actual:** a 255px panel (up to 368px if a width was saved earlier) covers ~70% of the screen, the page content is pushed the same distance right, and the whole page scrolls horizontally. There is no dimmed backdrop and no way to close the panel except the toggle now underneath it.
+
 **Problem:** The toggle render is gated on `isDesktop`, but `packages/shared/hooks/mediaQueries.ts` is, in its entirety, `export const useIsDesktop = () => true;` / `export const useIsMobile = () => false;`. The gate never evaluates false. `MainLayout` mounts `SideNav` with no viewport condition at all, so the mount is unguarded even in principle. `useResponsiveSidebar` — the one place that reads a real media query — only decides *collapsed vs open*, not *mounted vs not*.
 
-**Impact:** On a 375px viewport the hamburger renders, and tapping it mounts a `position: fixed; left: 0` panel of 255px (up to 368px if a width was persisted) over ~70% of the screen while `StyledMainLayoutContent` simultaneously takes `margin-left: 255px`. There is no backdrop and no responsive max-width, so page content is squeezed into a ~120px column with horizontal page scroll, and the only way out is the toggle now sitting underneath the panel. The PR's own commit message for `77e0b444` acknowledges the stub ("unreachable only while `useIsDesktop()` remains a `() => true` stub"), so the team is aware — but the sidebar ships on top of it rather than around it.
+**Impact:** The admin area is effectively unusable on a narrow viewport. The PR's own commit message for `77e0b444` acknowledges the stub ("unreachable only while `useIsDesktop()` remains a `() => true` stub"), so the team is aware — but the sidebar ships on top of it rather than around it.
 
 **Fix:** Don't rely on the stub. Derive the desktop signal from the same media query the sidebar already trusts, and gate the mount, not just the toggle:
 
@@ -88,13 +110,24 @@ Then either gate the `SideNav` mount on it, or give the narrow regime an overlay
 
 **[File: packages/shared/hooks/useSidebarResize.ts:57]**
 
+> **In plain terms:** The saved side bar width is read back from the browser's storage, and there's a safety check meant to force any nonsense value back into the allowed range. That check quietly fails for values that aren't numbers at all. The result is a broken layout on every admin page — the panel collapses onto the page content and sits on top of it — and dragging the handle can't fix it. The only way out is clearing browser storage by hand.
+
 **Function/Class:** useSidebarResize
 
 **Severity:** medium
 
-**Problem:** The comment reads `// Re-clamp on read so tampered storage can never escape bounds`, but lodash `clamp` does `toNumber(value)` then `baseClamp`, whose `if (number === number)` test skips NaN — so NaN passes through unchanged. `usehooks-ts` only falls back to the default when `JSON.parse` throws, and `"abc"` / `{}` parse fine, so a corrupt or tampered `adminSidebar.width` reaches `clamp` and comes back NaN. The PR's Security section claims "all localStorage values clamped to numbers before style sinks" and "stored widths re-clamped on read" — that claim does not hold.
+**Steps to reproduce:**
 
-**Impact:** `ResizableSidebar` emits `width: NaNpx` and `MainLayout` emits `margin-left: NaNpx` on `<main>` and the footer wrapper. The browser drops both declarations, so the fixed panel shrinks to fit its content and overlays un-offset page content, permanently obscuring the left edge of every admin page. `SidebarResizer` renders `aria-valuenow="NaN"`. It is not recoverable from the UI: `onResizePointerDown` seeds `targetWidth = width` (NaN) and `clamp(NaN + delta, …)` is still NaN, so dragging re-commits NaN. Only clearing localStorage by hand fixes it.
+1. Log in as an admin, open any admin page.
+2. Open DevTools → Application → Local Storage and set `adminSidebar.width` to `"abc"` (simulating corrupt or tampered storage).
+3. Reload the page.
+4. **Expected:** the invalid value is ignored and the side bar falls back to its 255px default.
+5. **Actual:** the side bar shrinks to fit its content and overlaps the page content, which is no longer offset — the left edge of every admin page is covered.
+6. Try to fix it by dragging the resize handle. **Actual:** the width never recovers; only clearing the storage key does.
+
+**Problem:** The comment reads `// Re-clamp on read so tampered storage can never escape bounds`, but lodash `clamp` does `toNumber(value)` then `baseClamp`, whose `if (number === number)` test skips NaN — so NaN passes through unchanged. `usehooks-ts` only falls back to the default when `JSON.parse` throws, and `"abc"` / `{}` parse fine. The PR's Security section claims "all localStorage values clamped to numbers before style sinks" and "stored widths re-clamped on read" — that claim does not hold.
+
+**Impact:** `ResizableSidebar` emits `width: NaNpx` and `MainLayout` emits `margin-left: NaNpx`; the browser drops both declarations. `SidebarResizer` renders `aria-valuenow="NaN"`. `onResizePointerDown` seeds `targetWidth = width` (NaN) and `clamp(NaN + delta, …)` is still NaN, so dragging re-commits NaN.
 
 **Fix:** Make the read-side guard actually total:
 
@@ -111,15 +144,25 @@ const width = toWidth(storedWidth);
 
 **[File: packages/shared/components/organisms/ResizableSidebar/index.tsx:34]**
 
+> **In plain terms:** When you load a page, the side bar first paints in its default state and then jumps to whatever you last chose. The code has a guard meant to make that correction instant and invisible — but the guard switches on at the exact moment the correction happens, so instead of hiding it, it animates it. Every page load, a collapsed side bar visibly slides shut and drags the page content with it.
+
 **Function/Class:** ResizableSidebar (`isHydrated`), and the same pattern in `MainLayout/useAdminSidebar.ts:53`
 
 **Severity:** medium
 
-**Problem:** `useIsClient`, `useSessionStorage` and `useLocalStorage` all commit in passive `useEffect`s (verified in `node_modules/usehooks-ts/dist/index.js`). React 18 batches them, so `isHydrated: true` lands in the *same* re-render as the persisted `isOpen` / `width` — enabling `transition: width 0.2s` at exactly the moment the width changes. Meanwhile `useMediaQuery` resolves in a layout effect, i.e. pre-paint, so the first paint uses the defaults (`defaultDesktopOpen = true`, 255px).
+**Steps to reproduce:**
 
-**Impact:** The exact behaviour the code comments claim to prevent. A user who collapsed the sidebar sees it paint open at 255px, then visibly slide shut while `StyledMainLayoutContent` / `StyledFooterOffset` animate their `margin-left` from 255px to 0 — a full-page content slide on every load. A user who resized to 368px sees the panel paint at 255px and animate outward.
+1. Log in as an admin on a desktop-width window and **collapse** the side bar with the menu icon.
+2. Navigate to any other admin page (or press F5).
+3. **Expected:** the page renders with the side bar already collapsed — no movement.
+4. **Actual:** the side bar paints open at 255px, then visibly slides shut, and the page content slides left with it.
+5. Repeat with the side bar **expanded to 368px** instead: the panel paints at 255px and animates outward.
 
-**Fix:** Gate on a value that is known *before* the storage values are applied — e.g. flip a ref/state in a `useLayoutEffect` that runs one frame *after* the restore, or key the transition off a `data-*` attribute set in a `requestAnimationFrame` callback:
+**Problem:** `useIsClient`, `useSessionStorage` and `useLocalStorage` all commit in passive `useEffect`s (verified in `node_modules/usehooks-ts/dist/index.js`). React 18 batches them, so `isHydrated: true` lands in the *same* re-render as the persisted `isOpen` / `width` — enabling `transition: width 0.2s` at exactly the moment the width changes. Meanwhile `useMediaQuery` resolves in a layout effect, i.e. pre-paint, so the first paint uses the defaults.
+
+**Impact:** The exact behaviour the code comments claim to prevent, on every admin page load.
+
+**Fix:** Gate on a value that is known *before* the storage values are applied — e.g. flip the flag one frame after the restore:
 
 ```typescript
 const [canAnimate, setCanAnimate] = useState(false);
@@ -135,13 +178,24 @@ useEffect(() => {
 
 **[File: apps/creative-portal/components/layouts/MainLayout/index.tsx:71]**
 
+> **In plain terms:** The app decides "you're in the Admin Area" by checking the current URL against a short list of exact pages. Deeper admin pages — like a partner's project settings — aren't on that list. While you click through the app it doesn't matter, because the app remembers where you came from. But reload the page, or open the link fresh from a bookmark, and it forgets: the admin side bar disappears and the top bar shows the creative-side links instead, on an admin page.
+
 **Function/Class:** MainLayout — `hasAdminSidebar = areaType === "admin" && isAdmin`
 
 **Severity:** high
 
-**Problem:** `MainLayout/hooks.ts` (unchanged by this PR) initialises `useState<AreaType>("creative")` and only force-sets `"admin"` when `[orders, teamMembers, customers, partners, reporting, availability, teamMembersProfile].includes(pathname)` — an **exact** match against the Next.js route pattern. Admin sub-routes are not in that list: `/partners/[partnerId]/projects/[projectId]/settings/general` (and its five siblings), `/team/profile/[memberId]/edit-personal-info`. In-app navigation works because `areaType` carries over from the previous page; a fresh load does not.
+**Steps to reproduce:**
 
-**Impact:** The same URL renders with completely different navigation depending on how it was reached. Press F5 on a partner project settings page, or open it from a bookmark or a shared link, and the admin side bar vanishes *and* the top bar falls back to `creativeMainNavLinks` — an admin stranded on an admin page with creative navigation. This was latent before (it only affected which top-bar links showed); making the entire primary navigation depend on it turns it into a visible defect.
+1. Log in as an admin and open `/partners`.
+2. Click through to a partner → project → **Settings → General**. The admin side bar is present. ✅
+3. Press **F5** (or copy that URL, open a new tab and paste it).
+4. **Expected:** the same page with the same admin navigation.
+5. **Actual:** the admin side bar is gone and the top bar shows the creative navigation links.
+6. Same result on `/team/profile/[memberId]/edit-personal-info`.
+
+**Problem:** `MainLayout/hooks.ts` (unchanged by this PR) initialises `useState<AreaType>("creative")` and only force-sets `"admin"` when `[orders, teamMembers, customers, partners, reporting, availability, teamMembersProfile].includes(pathname)` — an **exact** match against the Next.js route pattern. Admin sub-routes are not in that list.
+
+**Impact:** The same URL renders with completely different navigation depending on how it was reached. This was latent before (it only affected which top-bar links showed); making the entire primary navigation depend on it turns it into a visible defect.
 
 **Fix:** Derive `areaType` from a route *prefix* set rather than an exact list, and derive it during render rather than in an effect so it is correct on first paint. `adminSideNavHrefs` (already exported from `SideNav/consts.ts`, currently unused) is the natural source:
 
@@ -157,9 +211,20 @@ Note the PR body already flags this: "Admin route set is enumerated in nav const
 
 **[File: packages/shared/hooks/useSidebarResize.ts:152]**
 
+> **In plain terms:** While you drag the side bar's edge to resize it, the app watches for you letting go. It doesn't check *which* finger or pointer let go — so on a touch screen, a thumb resting on the page lifting mid-drag ends the resize early and saves the half-finished width. Carrying on dragging then does nothing, and the side bar is stuck at a width you didn't choose.
+
 **Function/Class:** useSidebarResize — drag termination listeners
 
 **Severity:** medium
+
+**Steps to reproduce:**
+
+1. On a touch device (or Chrome DevTools touch emulation with multi-touch), open an admin page as an admin.
+2. Rest one finger anywhere on the page.
+3. With a second finger, start dragging the side bar's right-hand resize handle.
+4. Mid-drag, lift the **resting** finger.
+5. **Expected:** the drag continues — that finger wasn't part of it.
+6. **Actual:** the guide line disappears, the drag ends, and the current half-finished width is saved. Continuing to drag with the second finger does nothing.
 
 **Problem:** The terminating listeners are attached to `document` with a zero-argument callback, so they cannot filter by `pointerId`:
 
@@ -175,9 +240,9 @@ document.addEventListener(
 );
 ```
 
-Any `pointerup` from any pointer terminates and commits the in-flight drag. The `pointermove` handler tracks a specific pointer; the termination handler does not.
+The `pointermove` handler tracks a specific pointer; the termination handler does not.
 
-**Impact:** On touch, a thumb resting on the page lifting mid-drag ends the resize: the guide line disappears, `isResizing` goes false, all listeners abort, and the half-finished width is written to `adminSidebar.width`. Continuing to drag does nothing and the sidebar is stuck at an unintended width. The same applies to a second mouse/pen pointer or a stylus hover-out.
+**Impact:** An unintended width is persisted, and the same applies to a second mouse/pen pointer or a stylus hover-out.
 
 **Fix:** Capture the starting `pointerId` in `onResizePointerDown` and filter both terminators against it:
 
@@ -196,13 +261,24 @@ const onPointerUp = (event: PointerEvent) => {
 
 **[File: packages/shared/hooks/useResponsiveSidebar.ts:56,61]**
 
+> **In plain terms:** Two halves of the same preference are remembered for different lengths of time. The width you drag the side bar to is remembered permanently; the decision to collapse it is forgotten as soon as you close the browser. So a user who collapsed it and made it wider comes back the next morning to a side bar that's expanded *and* wider than before — and has to collapse it again every day.
+
 **Function/Class:** useResponsiveSidebar
 
 **Severity:** medium
 
+**Steps to reproduce:**
+
+1. Log in as an admin on a desktop-width window.
+2. Drag the side bar to its maximum 368px, then collapse it with the menu icon.
+3. Refresh the page — both choices are honoured. ✅
+4. **Quit the browser entirely** (or open the app in a new tab) and log back in.
+5. **Expected:** side bar still collapsed.
+6. **Actual:** the side bar is expanded again, and now 368px wide — the width survived, the collapse did not.
+
 **Problem:** `desktop.open` / `narrow.open` use `useSessionStorage`; `useSidebarResize` writes `${storageKey}.width` to `useLocalStorage`. Two halves of one preference, two persistence tiers, one key prefix. The session tier is a deliberate choice (the doc comment ties it to req 5.3.3 — a fresh narrow session must start collapsed), so this is a design trade-off rather than an oversight, but it is undocumented outside that hook and contradicts the PR description, which states "all preferences client-side (`adminSidebar.open` / `adminSidebar.width` in localStorage)".
 
-**Impact:** Requirement 5.2 is satisfied for a same-tab refresh but not for a new tab or a browser restart. A user who collapses the sidebar and widens it to 368px returns the next morning to a sidebar that is expanded *and* 368px wide — the worst of both stored values — and has to re-collapse it every session. Note the PR body parks "Model C (sessionStorage narrow-tier)" as "pending ticket 5.3.3 amendment", which suggests the ticket wording, not the implementation, is what needs resolving.
+**Impact:** Requirement 5.2 is satisfied for a same-tab refresh but not for a new tab or a browser restart. Note the PR body parks "Model C (sessionStorage narrow-tier)" as "pending ticket 5.3.3 amendment", which suggests the ticket wording, not the implementation, is what needs resolving.
 
 **Fix:** Either (a) split the tiers by regime — desktop preference in localStorage, narrow preference in sessionStorage, which satisfies 5.3.3 without discarding the desktop choice; or (b) keep sessionStorage and get the ticket amended, but then move the width to sessionStorage too so the two halves cannot disagree. Correct the PR description either way.
 
@@ -210,13 +286,22 @@ const onPointerUp = (event: PointerEvent) => {
 
 **[File: apps/creative-portal/components/layouts/MainLayout/index.tsx:71]**
 
+> **In plain terms:** Some pages — like the two-factor-authentication setup screens — deliberately hide the top bar's tools. The side bar doesn't know about that rule, so it still appears on those pages, while the button that closes it does not. The nav panel sits over the setup form, pushing it sideways, and there is nothing on the page that can dismiss it.
+
 **Function/Class:** MainLayout — `hasAdminSidebar`
 
 **Severity:** medium
 
-**Problem:** `hasAdminSidebar = areaType === "admin" && isAdmin`, but Header renders `SidebarToggleButton` only when `isLoggedIn && !hasHiddenToolsLayout && isDesktop && onToggleSidebar`. `hasHiddenToolsLayout` appears in the toggle condition and not in the mount condition, so the two can disagree.
+**Steps to reproduce:**
 
-**Impact:** On a hidden-tools page reached by client-side navigation from an admin page (e.g. the MFA flow at `/authentication-method` or `/authenticator-app` — neither is in the force-creative or force-admin lists, so `areaType` keeps its previous `"admin"` value), the side bar mounts open at 255px while Header skips the toggle entirely. The nav panel sits over the authenticator setup flow, the form is pushed 255px right, and there is no control anywhere on the page to collapse it.
+1. Log in as an admin and open `/orders` so the admin area is active.
+2. Navigate **within the app** (don't reload) to the MFA setup flow — `/authentication-method` or `/authenticator-app`.
+3. **Expected:** a clean setup screen with no admin navigation, matching the hidden-tools layout.
+4. **Actual:** the side bar is mounted and open at 255px, the setup form is pushed 255px right, and no toggle button is rendered anywhere on the page to collapse it.
+
+**Problem:** `hasAdminSidebar = areaType === "admin" && isAdmin`, but Header renders `SidebarToggleButton` only when `isLoggedIn && !hasHiddenToolsLayout && isDesktop && onToggleSidebar`. `hasHiddenToolsLayout` appears in the toggle condition and not in the mount condition, so the two can disagree. (Neither MFA path is in the force-creative or force-admin lists, so `areaType` keeps its previous `"admin"` value — see Issue 4.)
+
+**Impact:** A nav panel the user cannot dismiss, on a flow that is meant to be distraction-free.
 
 **Fix:** Make the two gates one expression and pass it down, so they cannot drift:
 
@@ -229,13 +314,23 @@ const hasAdminSidebar =
 
 **[File: apps/creative-portal/components/molecules/SearchBar/index.tsx:120]**
 
+> **In plain terms:** The X button that cleared the search box no longer appears anywhere, because it now depends on something no screen passes in. For mouse users this is a minor loss — clicking elsewhere still closes the results. For anyone navigating by keyboard it's a trap: type three characters, the results panel covers the page, and there is no Escape handler and no button to close it. The only way out is deleting every character.
+
 **Function/Class:** SearchBar
 
 **Severity:** medium
 
+**Steps to reproduce:**
+
+1. Log in as an admin and put focus in the top-bar search using **Tab only** (no mouse).
+2. Type three characters, e.g. `ord`.
+3. **Expected:** an X button to clear the field, and/or Escape to dismiss the results.
+4. **Actual:** no X button renders at all. Press **Escape** — nothing happens. The opaque results panel stays over the page content.
+5. The only way to reveal the page again is to backspace all three characters.
+
 **Problem:** The close button was unconditional (with `onCloseClick` a required prop); it is now `{onCloseClick && (…)}`. Header — the only caller — renders `<SearchBar placeholder="Search for Orders or Team Members" />` with no `onCloseClick`, so the button never renders. `SearchBar/index.tsx` and `hooks.ts` have no `keydown`/Escape handler; the only remaining reset path is a document `mousedown` listener.
 
-**Impact:** A keyboard-only admin who types three characters gets the absolutely-positioned results panel (opaque, `max-height: 32rem`) over the page content and cannot dismiss it — they must backspace every character. It also leaves the `onCloseClick` prop, the `aria-label="Close search"` markup and the `IconCloseFilled` import as dead code in the shipped bundle.
+**Impact:** A keyboard-only admin cannot dismiss the results overlay. It also leaves the `onCloseClick` prop, the `aria-label="Close search"` markup and the `IconCloseFilled` import as dead code in the shipped bundle.
 
 **Fix:** Add an Escape handler in `SearchBar/hooks.ts` regardless of the button (this is the accessible dismiss path for a combobox-style overlay), and either drop the now-unused `onCloseClick` branch or have Header pass a handler:
 
@@ -249,13 +344,22 @@ const onKeyDown = (event: React.KeyboardEvent) => {
 
 **[File: apps/creative-portal/components/organisms/SideNav/consts.ts:24]**
 
+> **In plain terms:** The side bar is positioned by assuming the top bar is always 60px tall. On small screens the top bar is taller than that, so the panel starts too high — its first item slides under the header and can't be clicked, with a matching strip of empty space at the bottom. You can only get there because of Issue 1, so fixing that makes this go away.
+
 **Function/Class:** `SIDE_NAV_TOP_OFFSET = HEADER_HEIGHT`
 
 **Severity:** low
 
-**Problem:** `HEADER_HEIGHT` (3.75rem) is documented as the "rendered top-bar height at tabletSm+" — `StyledHeaderContent` only applies it inside `@media ${media.tabletSm}`. Below that breakpoint the header has no fixed height (just `padding-top: 1.5rem`), so the panel's `top: 3.75rem` / `height: calc(100vh - 3.75rem)` do not match the actual header box.
+**Steps to reproduce:**
 
-**Impact:** On a sub-`tabletSm` viewport the panel's first ~10–20px — including the top of the "Orders" item and its `padding-top` — renders underneath the fixed header and is unclickable, with an equal strip of dead space at the bottom. Only reachable because of Issue 1; fixing that gate makes this unreachable, which is why it is rated low.
+1. Reduce the browser width below the `tabletSm` breakpoint (~768px).
+2. Open the side bar (possible only because of Issue 1).
+3. **Expected:** the panel starts flush beneath the header.
+4. **Actual:** the top ~10–20px of the panel — including the top of the "Orders" item — sits behind the fixed header and cannot be clicked, and an equal strip of dead space appears at the bottom of the viewport.
+
+**Problem:** `HEADER_HEIGHT` (3.75rem) is documented as the "rendered top-bar height at tabletSm+" — `StyledHeaderContent` only applies it inside `@media ${media.tabletSm}`. Below that breakpoint the header has no fixed height (just `padding-top: 1.5rem`), so the panel's `top` / `height` do not match the actual header box.
+
+**Impact:** Unclickable nav item on narrow screens. Only reachable because of Issue 1, which is why it is rated low.
 
 **Fix:** Fold into the Issue 1 fix. If the sidebar is ever meant to render below `tabletSm`, make the offset breakpoint-aware rather than a single token.
 
@@ -263,13 +367,23 @@ const onKeyDown = (event: React.KeyboardEvent) => {
 
 **[File: apps/creative-portal/components/organisms/Header/index.tsx:195,264]**
 
+> **In plain terms:** The ticket asks for a smaller logo and avatar in the *Admin Area* top bar. The change was applied everywhere instead — so editors and reviewers who never open the Admin Area now have a profile picture 12px smaller in both directions (and a smaller click target for the logout menu), and the logo is smaller on the login and onboarding screens too. Nobody asked for that, and a designer would normally sign it off per screen.
+
 **Function/Class:** Header — `Logo` and `Avatar` size props
 
 **Severity:** medium
 
-**Problem:** `LogoSize.Default → LogoSize.Small` at both logo call sites and `AvatarSize.Default → AvatarSize.Small` on the dropdown avatar, with no `areaType` condition on any of them. The ticket scopes the smaller logo to the Admin Area top bar.
+**Steps to reproduce:**
 
-**Impact:** Per `Avatar/styles.ts` the 1em-square wrapper drops from 2.75rem (44px) to 2rem (32px), so the account/logout click target shrinks by 12px in both dimensions for every logged-in user — including editors and reviewers who never open the Admin Area. The logo shrinks on the login and onboarding screens too. This is a visual regression on surfaces PP-1918 does not cover, and it is the kind of change a designer signs off on per-surface.
+1. Log in as an **editor or reviewer** (a non-admin who only ever sees the creative portal).
+2. Compare the header avatar with `develop`.
+3. **Expected:** unchanged — PP-1918 covers the Admin Area only.
+4. **Actual:** the avatar is 32px instead of 44px, so the account/logout click target is 12px smaller in both dimensions.
+5. Also check the **login** and **onboarding** screens while logged out: the logo is smaller there too.
+
+**Problem:** `LogoSize.Default → LogoSize.Small` at both logo call sites and `AvatarSize.Default → AvatarSize.Small` on the dropdown avatar, with no `areaType` condition on any of them.
+
+**Impact:** A visual regression on surfaces PP-1918 does not cover, including a smaller interactive target.
 
 **Fix:** Gate on the area, matching how the rest of the header branches:
 
@@ -312,6 +426,19 @@ Or confirm with the designer that the smaller sizes are intended platform-wide a
 - ❌ No test covers the NaN-width path (Issue 2), the hidden-tools gate mismatch (Issue 7), or the missing keyboard dismiss (Issue 8).
 - ❌ No test asserts that the sidebar stays out of the way below the 1280px breakpoint at the **mount** level (Issue 1) — the existing coverage tests `useResponsiveSidebar` in isolation, where the media query is real, not the composed layout, where the gate is the `useIsDesktop` stub.
 - ⚠️ Full suite not executed by author or reviewer — see Validation Checks.
+
+### Suggested manual QA script
+
+Run these against the PR branch before merge — each maps to an issue above:
+
+1. **Narrow viewport** — at ~375px, confirm the side bar and its toggle are absent, or presented as an overlay that doesn't push content (Issue 1).
+2. **Deep-link reload** — open a partner project settings URL in a fresh tab; confirm the admin side bar is present (Issue 4).
+3. **Collapsed reload** — collapse the side bar, navigate to another admin page; confirm no slide animation (Issue 3).
+4. **Browser restart** — collapse and widen the side bar, quit the browser, reopen; confirm both choices survive (Issue 6).
+5. **MFA flow** — from `/orders`, navigate to `/authenticator-app`; confirm no side bar, or a side bar with a working toggle (Issue 7).
+6. **Keyboard search** — Tab into the search field, type 3 characters, press Escape; confirm the results dismiss (Issue 8).
+7. **Touch resize** — with a finger resting on the page, drag the resize handle and lift the resting finger; confirm the drag continues (Issue 5).
+8. **Creative portal** — log in as an editor and compare header avatar/logo sizes with `develop` (Issue 10).
 
 ---
 
