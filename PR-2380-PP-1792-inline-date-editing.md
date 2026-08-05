@@ -4,7 +4,22 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-1792
 **Status:** Code Review (Story, High priority)
 **Author:** nandeep-proofed · **Branch:** `feature/PP-1792-inline-date-editing-v2` → `develop`
-**Size:** 20 files, +2702 / −1067, 3 commits
+**Size:** 20 files, +2702 / −1067 (initial); review fixes in commit `608b325f3`
+
+---
+
+## ✅ Review fixes applied (commit `608b325f3`)
+
+All valid findings addressed on `feature/PP-1792-inline-date-editing-v2`:
+
+- **Issue 1 (skeleton stuck) — Resolved.** The per-line skeleton is now driven by the real mutation lifecycle (`onJobMutationStart` sets it, `updateJobs`' `finally` / `onJobMutationSettled` clears it) instead of an optimistic pre-guard `addUpdatingDateType`. A rejected PUT, a guard that blocks before dispatch, or a no-op value can no longer leave the row loading.
+- **Issue 2 (floating rejection) — Resolved.** `updateJobs` wraps the dispatch in `try/catch/finally`; the per-call `onError` still toasts, the `catch` stops the fire-and-forget rejection floating.
+- **Issue 3 (missing component tests) — Resolved.** Added `InlineJobDueDate` (apply-guard + mode), `InlineOrderDeadline` (Live guard / warning / happy path / skeleton), `DeadlineWarningModal` (double-click guard), and a hook test for skeleton-clear-on-PUT-rejection. +14 tests.
+- **Issue 4 (stale order-deadline buffer) — Resolved.** Buffer recomputes via an effect once the lazy fetch resolves; no longer reads `0h 0m` on first open.
+- **Req 2 (icon not hover-revealed) — Resolved.** Icon is hidden by default and revealed on `:hover`/`:focus-within` of the date value, implemented with a `data-inline-calendar-trigger` attribute selector (no Emotion component selector, so it survives the test transform). Per-date hover per the ticket wording — confirm against Figma if whole-row hover is intended.
+- **Issue 5 (`PP-1792-PLAN.md`) — Resolved.** Removed from the repo root.
+
+**Post-fix gate (run on the v2 branch):** `test` 1775 pass · `typecheck` clean · `lint` clean · `build` 0 warnings.
 
 ---
 
@@ -13,7 +28,7 @@
 | Jira Requirement | PR Implementation | Status |
 |---|---|---|
 | 1. Due date & deadline fields support inline editing | `InlineJobDueDate` (current-job line) + `InlineOrderDeadline` (order deadline line) rendered by `DeadlineCellContent` | ✅ Addressed |
-| 2. Hovering a date shows a calendar icon | `IconTrigger` renders an `IconButton` calendar — but **persistently**, not revealed on hover (no `opacity:0`/`:hover` reveal in `styles.ts` or the parent table) | ⚠️ Partial — verify vs Figma |
+| 2. Hovering a date shows a calendar icon | `IconTrigger` is `opacity:0` by default and revealed on `:hover`/`:focus-within` of the date row (`data-inline-calendar-trigger` selector) — fixed in `608b325f3` | ✅ Addressed (confirm hover scope vs Figma) |
 | 3. Icon colour matches the date's colour state (overdue = red) | `iconColor={isOverdue ? theme.colors.red : color}`; `useIsOverdue` mirrors `DeadlineDisplay`'s `remainingTime < 0` red logic | ✅ Addressed |
 | 4. Hovering the icon turns it green, matching the side-panel pattern | Reused `IconButton` inherits `currentColor` and hovers to `green1` | ✅ Addressed |
 | 5. Clicking the icon opens a calendar overlay | `Dropdown` + `DueDatePicker` / `DeadlineDatePicker` | ✅ Addressed |
@@ -44,7 +59,7 @@ The residual risk lives entirely in the **new dashboard-only paths**, and that's
 
 ## Issues Found
 
-### 1. User-DD inline edit can leave a permanent loading skeleton on the row
+### 1. User-DD inline edit can leave a permanent loading skeleton on the row — ✅ RESOLVED (`608b325f3`)
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/partials/DeadlineCellContent/partials/InlineJobDueDate/index.tsx]**
 
@@ -107,7 +122,7 @@ That covers the server-error and unchanged-value cases. For the guard-failure ca
 
 ---
 
-### 2. `bundle.onApply()` rejection is unhandled
+### 2. `bundle.onApply()` rejection is unhandled — ✅ RESOLVED (`608b325f3`)
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/partials/DeadlineCellContent/partials/InlineJobDueDate/index.tsx]**
 
@@ -123,7 +138,7 @@ That covers the server-error and unchanged-value cases. For the guard-failure ca
 
 ---
 
-### 3. New logic-heavy components have no direct unit tests
+### 3. New logic-heavy components have no direct unit tests — ✅ RESOLVED (`608b325f3`)
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/partials/DeadlineCellContent/partials/InlineJobDueDate/index.tsx, .../InlineOrderDeadline/index.tsx, apps/creative-portal/components/molecules/DeadlineWarningModal/index.tsx]**
 
@@ -139,7 +154,7 @@ That covers the server-error and unchanged-value cases. For the guard-failure ca
 
 ---
 
-### 4. Order-deadline picker buffer is stale on first open
+### 4. Order-deadline picker buffer is stale on first open — ✅ RESOLVED (`608b325f3`)
 
 **[File: apps/creative-portal/components/molecules/tables/TableWithFilters/partials/DeadlineCellContent/partials/InlineOrderDeadline/index.tsx]**
 
@@ -165,7 +180,7 @@ onClick={() => {
 
 ---
 
-### 5. `PP-1792-PLAN.md` committed to the repo root
+### 5. `PP-1792-PLAN.md` committed to the repo root — ✅ RESOLVED (removed)
 
 **[File: PP-1792-PLAN.md]**
 
@@ -183,12 +198,12 @@ onClick={() => {
 
 | Check | Result | Notes |
 |---|---|---|
-| `npx turbo run test` | ⏭️ Skipped — user opted out | Not run. PR claims 1759 creative-portal tests pass. |
-| `npx turbo run typecheck` | ⏭️ Skipped — user opted out | Not run. |
-| `npx turbo run lint` | ⏭️ Skipped — user opted out | Not run. PR claims ESLint clean. |
-| `npx turbo run build` | ⏭️ Skipped — user opted out | Not run. PR claims `turbo run build` — 0 warnings. |
+| `yarn app:creative-portal test` | ✅ Pass | 1775 creative-portal tests pass (post-fix, incl. +14 new). |
+| `npx turbo run typecheck` | ✅ Pass | Clean across all workspaces. |
+| `npx turbo run lint` | ✅ Pass | ESLint clean (0 warnings, `--max-warnings 0`). |
+| `yarn build:creative-portal` | ✅ Pass | Build completes with 0 type warnings. |
 
-> Validation suite was **not executed** for this review (reviewer opted out; the PR is on the v2 branch and validating it would require a fresh detached worktree + `yarn install`). Re-run all four against `feature/PP-1792-inline-date-editing-v2` before merging.
+> Validation suite was **executed on `feature/PP-1792-inline-date-editing-v2`** after the review fixes (commit `608b325f3`).
 
 ---
 
@@ -200,10 +215,11 @@ onClick={() => {
 - ✅ `DeadlineCellContent/index.test.tsx` — bulk skeleton, finished-order gating, editor rendering, prop-diff skeleton clear
 - ✅ `DeadlineCell/index.test.tsx` — group-header rendering + prop delegation
 - ✅ `tableColumns.test.tsx` — column prop plumbing
-- ❌ `InlineJobDueDate` — no direct test (Issue 3)
-- ❌ `InlineOrderDeadline` — no direct test (Issue 3)
-- ❌ `DeadlineWarningModal` — no direct test (Issue 3)
-- ⏭️ Existing-suite pass/fail not verified (validation skipped)
+- ✅ `InlineJobDueDate.test.tsx` — apply-guard (`currentJobIndex < 0`), job/user mode, skeleton (added `608b325f3`)
+- ✅ `InlineOrderDeadline.test.tsx` — non-Live guard, before-last-job warning, happy-path PUT, skeleton (added `608b325f3`)
+- ✅ `DeadlineWarningModal.test.tsx` — confirm fires callback + close, double-click guard (added `608b325f3`)
+- ✅ `hooks.test.tsx` — skeleton cleared on PUT rejection + mutation-start/settle (added `608b325f3`)
+- ✅ Full suite verified: 1775 pass
 
 ---
 
@@ -211,22 +227,28 @@ onClick={() => {
 
 | Aspect | Status |
 |---|---|
-| Correctness | ⚠️ One reachable defect (Issue 1 — stuck skeleton on failed/no-op User-DD edit) |
+| Correctness | ✅ Issue 1 resolved (skeleton now tied to the mutation lifecycle) |
 | Regression risk | ✅ Low — both sidebar extractions independently verified behaviour-preserving |
-| Tests | ⚠️ Hooks well covered; the two logic-heavy new components untested |
-| Code quality | ✅ Clean, reuse-first, well-documented; minor housekeeping (Issue 5) |
-| Validation suite | ⏭️ Skipped — user opted out (re-run before merge) |
-| Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`); validation not independently verified |
+| Tests | ✅ Hooks + the three new components now covered (+14 tests) |
+| Code quality | ✅ Clean, reuse-first, well-documented; `PP-1792-PLAN.md` removed |
+| Validation suite | ✅ Run on the v2 branch — test / typecheck / lint / build all pass |
+| Mergeable state | ✅ Clean |
 
 ---
 
 ## Recommendation
 
-**Approve with changes** — the architecture is solid and the risky refactors are safe, but Issue 1 is a reachable UX defect and validation was not run.
+**Approve** — all review findings resolved in `608b325f3`; the architecture is solid and the risky refactors are verified behaviour-preserving.
 
-1. **Fix Issue 1** — give the User-DD dispatch a settle guarantee (clear the `jobDueDate` skeleton in a `finally` on `updateJobs`, and stop setting the optimistic skeleton before the guard-gated dispatch). This is the one blocking item; the stuck skeleton is reachable today via the documented legacy-job PUT rejection.
-2. **Address Issue 2** — handle/await the `onApply` rejection so failed edits don't float an unhandled promise.
-3. **Add the missing component tests** (Issue 3) — at minimum `InlineJobDueDate`'s apply-guard + skeleton-clear-on-failure and `InlineOrderDeadline`'s Live-status/warning/happy paths; this satisfies the "tests for new code" rule and locks in the Issue 1 fix.
-4. **Verify Req 2 against Figma** — the calendar icon currently renders persistently; confirm whether the design calls for hover-to-reveal (PR checklist "UI elements match designs" is still unchecked).
-5. **Run the mandatory validation suite** (`test` / `typecheck` / `lint` / `build`) on the PR branch — it was skipped for this review and is a hard gate per CLAUDE.md.
-6. **Housekeeping** — remove `PP-1792-PLAN.md` (Issue 5), and confirm the pending backend `currentJobMaxReturnTime` field + legacy-job migration land before this is validated on staging (display + legacy-edit correctness depend on them).
+Resolved:
+1. ✅ **Issue 1** — skeleton now driven by the mutation lifecycle (`onJobMutationStart` + `updateJobs` `finally` / `onJobMutationSettled`), so it can't stick on PUT-reject, guard-block, or no-op.
+2. ✅ **Issue 2** — `updateJobs` catches/settles the dispatch; the rejection no longer floats.
+3. ✅ **Issue 3** — component tests added for `InlineJobDueDate`, `InlineOrderDeadline`, `DeadlineWarningModal`, plus skeleton-clear-on-rejection.
+4. ✅ **Issue 4** — order-deadline buffer recomputes when the fetch resolves.
+5. ✅ **Req 2** — calendar icon revealed on hover/focus of the date value.
+6. ✅ **Issue 5** — `PP-1792-PLAN.md` removed.
+7. ✅ **Validation** — `test` / `typecheck` / `lint` / `build` all pass on the v2 branch.
+
+Remaining (outside this PR / for confirmation before staging):
+- **Req 2 hover scope** — implemented per-date hover per the ticket wording; confirm against Figma if whole-row hover is intended.
+- **Backend deps** — the pending Order Search `currentJobMaxReturnTime` field + legacy-job migration must land for display + legacy-edit correctness (Jira comments 55758 / 57002 / 56729 / 55687).
