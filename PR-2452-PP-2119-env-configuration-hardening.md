@@ -6,6 +6,111 @@
 **Branch:** `chore/PP-2119-env-configuration-hardening` → `develop`
 **Head reviewed:** `5125fe9ff6f7e14486db243a0bae3b5ea8b76104` (base `e5e016eec`)
 **Size:** 23 files, +1467 / −191
+**Findings verified:** all 22 reproduced independently against the shipped code
+**Fixes applied:** 21 of 22 — see Resolution Status below
+
+---
+
+## Resolution Status
+
+Every finding in this document was re-verified against the code before any
+fix was written: schemas executed against real yup 0.32.11, mutations run
+with a passing positive control, and the Next 14.1.1 internals read in
+`node_modules`. All 22 stood up. Two minor corrections to this document's
+own evidence are noted at the end of this section.
+
+| # | Finding | Sev | Status |
+|---|---|---|---|
+| 1 | Fresh `.env.example` copy cannot start either portal | high | ✅ Fixed |
+| 2 | `SKIP_ENV_VALIDATION` + misspelled env disables every guard | high | ✅ Fixed |
+| 3 | Look-alike host protection untested | high | ✅ Fixed |
+| 4 | Customer canary tests vacuous | high | ✅ Fixed |
+| 5 | devtest + `MFA_DISABLED` cannot boot; escape hatch refused | high | ✅ Fixed — devtest guarded, hatch restored there |
+| 6 | Whitespace-only optional value blocks boot | medium | ✅ Fixed |
+| 7 | Boot check accepts entries the parser discards | medium | ✅ Fixed |
+| 8 | Default-port entry matches a different set of hosts | medium | ✅ Fixed |
+| 9 | `local` on a deployed server disables every guard | medium | ⚠️ Mitigated — no longer silent; see status |
+| 10 | `MODULE_NOT_FOUND` in the boot hook swallowed in production | medium | ✅ Fixed |
+| 11 | `groups` and `SKIP_VALUES` branches untested | medium | ✅ Fixed |
+| 12 | Unsourced `.min(16)` now boot-fatal | medium | ✅ Fixed — floor dropped, so no measurement needed |
+| 13 | Drive-only Google credentials stop the whole portal | medium | ✅ Fixed |
+| 14 | `getAll.ts` production integration untested | medium | ✅ Fixed |
+| 15 | Control characters corrupt the rewritten path | low | ✅ Fixed |
+| 16 | Docs contradict the code on which environments are guarded | low | ✅ Fixed |
+| 17 | Two `.toLowerCase()` calls dead, two tests vacuous | low | ✅ Fixed |
+| 18 | `process.exit(1)` rationale wrong for Next 14.1.1 | low | ✅ Fixed |
+| 19 | One missing variable reported as two problems | low | ✅ Fixed |
+| 20 | Three PR-description claims do not match the base branch | low | ⚠️ Text prepared — needs a PR body edit |
+| 21 | Dead `REACT_APP_API_KEY`; Logtail contract undocumented | low | ✅ Fixed |
+| 22 | Stale comment in the shared yup mock | low | ✅ Fixed |
+
+**Fixed: 1–8, 10–19, 21, 22** — every finding except 9 (mitigated; the
+residual gap is a deploy-time concern) and 20 (text prepared below, but it
+is a PR body edit, not a code change). — all six the Recommendation
+marked blocking, every test-quality finding, and both items it listed as
+strongly recommended before merge apart from Issue 12, which is gated on the
+length of the real API keys.
+
+### Mutation results after the fixes
+
+Each test fix is pinned by the same mutation that exposed the gap, not by
+the suite merely passing.
+
+| Mutation | Before | After |
+|---|---|---|
+| `candidate.fromHost === host` → `host.endsWith(...)` | SURVIVED 24/24 | **KILLED** — 1 failed |
+| `candidate.fromHost === host` → `host.includes(...)` | not tested | **KILLED** — 3 failed |
+| `if (errors.length > 0)` → `if (false)` (customer) | SURVIVED 19/19 | **KILLED** — 18 failed |
+| `if (errors.length > 0)` → `if (false)` (creative) | 1 failed | **KILLED** — 17 failed |
+| `options.groups \|\| [...]` → always `[...]` | SURVIVED 28/28 | **KILLED** — 2 failed |
+| `SKIP_VALUES` allow-list → `if (env[SKIP_FLAG])` | SURVIVED 28/28 | **KILLED** — 4 failed |
+| drop `uri: rewriteServiceUri(item.uri, ...)` | no test existed | **KILLED** — 2 failed |
+| drop the directory-URL rewrite | no test existed | **KILLED** — 1 failed |
+| `isDeployed` reverted to `DEPLOYED_ENVIRONMENTS.includes(...)` | n/a — new guard | **KILLED** — 1 failed |
+| `SKIP_REFUSED_ENVIRONMENTS` widened to include devtest | n/a — new guard | **KILLED** — 1 failed |
+| `SKIP_REFUSED_ENVIRONMENTS` narrowed to production only | n/a — new guard | **KILLED** — 1 failed |
+| `blankAsMissing` reverted to the exact-empty check | n/a — was the bug | **KILLED** — 5 failed |
+| `blankAsMissing` over-trimmed (trims the value too) | n/a — new guard | **KILLED** — 1 failed |
+| scheme-ambiguity guard disabled (restores the Issue 8 bug) | n/a — new guard | **KILLED** — 4 failed |
+| ambiguity guard applied to scheme-ful values too | n/a — new guard | SURVIVED — see note |
+| the "local is unguarded" warning removed | n/a — new guard | **KILLED** — 1 failed |
+| that warning fired at build time too | n/a — new guard | **KILLED** — 1 failed |
+| the boot-hook import moved back outside the `try` | n/a — was the bug | **KILLED** — 1 failed |
+| the success log line removed | n/a — new guard | **KILLED** — 1 failed |
+| `.min(16)` re-added to `SERVICES_API_KEY` | n/a — was the bug | **KILLED** — 1 failed |
+| a Drive-only Google key made `.required()` again | n/a — was the bug | **KILLED** — 2 failed |
+| the justified `.min(32)` dropped | n/a — new guard | **KILLED** — 1 failed |
+| the tab/LF/CR normalisation removed | n/a — was the bug | **KILLED** — 3 failed |
+| the normalised URI returned when nothing matched | n/a — new guard | **KILLED** — 1 failed |
+
+Test counts: `env-utils` 28 → 66, `rewriteServiceUri` 24 → 39,
+`getAll` 0 → 5 (new file), `instrumentation` 0 → 4 per portal (new
+files), `env.test.ts` 19 → 24 (customer) and 18 → 21 (creative).
+**+74 tests**, on top of the 89 the PR already added.
+
+One mutation survived, and is recorded rather than hidden: removing the
+`!hasScheme` half of the Issue 8 guard changes no result, because
+`portDependsOnScheme` already returns false for a value that carries a
+scheme. The comment there now says so instead of implying coverage that
+does not exist — which is the same defect Issue 17 raised. The half of
+the guard that does the work is pinned: disabling it fails 4 tests.
+
+### Corrections to this document
+
+Two pieces of stated evidence are slightly off; neither changes a verdict.
+
+- **Issue 20** cites `git grep "GOOGLE" e5e016eec -- apps/creative-portal`
+  → 0 hits. It returns 1: an unrelated `GOOGLE_DRIVE_FILE_FORMATS` import in
+  `api/aiReviewFeedback/consts.ts`. The substantive claim holds — the base
+  `env.js` and `.env.example` declare no Google **env key**.
+- **Issue 11**'s sub-claim that the `[error]` fallback at `:168` is
+  unreachable is consistent with probing yup 0.32.11 under
+  `abortEarly: false`, but was not exhaustively proven.
+- **Issue 4** was written against `5125fe9ff`. Commit `9ceb723f2` landed
+  afterwards and rewrote both `env.test.ts` files, so the quoted snippet no
+  longer matches. The finding still applied to the rewritten form —
+  `messageFor` returned `""` on no-throw, leaving every `not.toContain`
+  assertion vacuously true — and was fixed on that basis.
 
 ---
 
@@ -95,6 +200,8 @@ actually hold.
 
 ### 1. A fresh `.env.example` copy cannot start either portal
 
+**Status:** ✅ Fixed — `NEXT_PUBLIC_APP_VERSION` given a working default plus a comment in both `.env.example` files, and relaxed to `.notRequired()` in both the `runtime` and `build` groups. Every consumer already tolerates absence (`envs.ts:14` does `|| ""`, `nextConfig.js:88` guards with a ternary), so a hard boot gate on it was stricter than anything needed it to be. A fresh template now passes the `next.config.js` build-group check for both portals.
+
 **[File: apps/creative-portal/.env.example:42, apps/customer-portal/.env.example:41]**
 
 > **In plain terms:** Following the project's own setup instructions leaves you
@@ -173,6 +280,8 @@ NEXT_PUBLIC_APP_VERSION=0.0.0-local
 ---
 
 ### 2. `SKIP_ENV_VALIDATION` plus a misspelled environment name disables every guard on a live server
+
+**Status:** ✅ Fixed — `NEXT_PUBLIC_ENVIRONMENT` is now validated *before* the skip branch reads it, and `isDeployed` treats unknown or absent as deployed. `Production`, `prod`, `PRODUCTION`, `devtest ` and unset all reject; `local` still skips legitimately. 5 tests added, and the existing `bypasses validation and warns loudly` test — which asserted the old behaviour with no environment set — was pinned to `local`.
 
 **[File: packages/shared/utils/env-utils.js:196-219]**
 
@@ -261,6 +370,8 @@ const isDeployed = environment !== "local";
 
 ### 3. The look-alike host protection — the change's stated security property — is untested
 
+**Status:** ✅ Fixed — Suffix-direction test added (`evil.private.example.com`), and the existing test renamed from `is not fooled by a lookalike suffix host` to `...by a host the configured host prefixes`, since it checked the harmless direction. No production change — the match was already correct.
+
 **[File: packages/shared/api/services/rewriteServiceUri.test.ts:140-147]**
 
 > **In plain terms:** The change promises that a web address merely *resembling*
@@ -328,6 +439,8 @@ it("is not fooled by a host that ends with the configured host", () => {
 ---
 
 ### 4. Eighteen of the nineteen customer-portal tests pass with validation entirely disabled
+
+**Status:** ✅ Fixed — `messageFor` now ends in `expect.unreachable()` rather than returning `""`, so an environment that fails to be rejected fails the test. Applied to both portals. The one test still passing under the mutation is the `NEXT_PUBLIC_ENVIRONMENT` canary, which trips the new Issue 2 guard directly rather than the error array — correct.
 
 **[File: apps/customer-portal/env.test.ts:36-65]**
 
@@ -404,6 +517,8 @@ it(`${key} does not echo its value in the error`, () => {
 
 ### 5. A devtest server with MFA disabled cannot boot, and the escape hatch its own template documents is refused there
 
+**Status:** ✅ Fixed — devtest is now guarded but keeps the escape hatch. A second, narrower `SKIP_REFUSED_ENVIRONMENTS = ["stage", "production"]` was added beside `DEPLOYED_ENVIRONMENTS`: the `MFA_DISABLED` and `SERVICES_URI_REWRITE` guards still apply on devtest, but `SKIP_ENV_VALIDATION=1` is honoured there, so a devtest box that will not boot is recoverable without hand-editing the VM. An unset environment is refused too, since it could be anything. **No documentation change was needed** — both `.env.example` files already said the hatch is ignored "when NEXT_PUBLIC_ENVIRONMENT is stage or production", which is now exactly true. The existing three-environment refusal test was split, and the `[undefined]` group label (a side effect of the Issue 2 change) now reads `[deployed]`.
+
 **[File: packages/shared/utils/env-utils.js:47 and :199-209]**
 
 > **In plain terms:** Test servers commonly have two-factor login switched off so
@@ -479,6 +594,8 @@ before merging. If devtest should keep the escape hatch, restrict the refusal to
 
 ### 6. A whitespace-only value in an optional variable blocks boot
 
+**Status:** ✅ Fixed — `blankAsMissing` now treats any whitespace-only value as missing, in both directions: an optional field set to `" "` no longer blocks boot, and a space no longer satisfies `.required()` on a field that matters — the second half the finding noted in passing. Values that are merely padded are deliberately left untouched, because the application reads `process.env` directly: validating a trimmed copy would check a string nothing else ever sees. The test pins that distinction — `"  short  "` is 9 characters as written and 5 if trimmed, so clearing `min(8)` is what proves it arrived intact.
+
 **[File: packages/shared/utils/env-utils.js:149-159]**
 
 > **In plain terms:** An optional setting left as a single space instead of truly
@@ -545,6 +662,8 @@ direction.
 ---
 
 ### 7. The boot-time rewrite check accepts entries the parser then silently discards
+
+**Status:** ✅ Fixed — Fixed by removing the second implementation rather than correcting it. The suggested fix could not be applied as written: `env-utils.js` is reached from plain Node (`next.config.js` → `apps/*/env.js` → `require`) with no transpilation in the chain, so it cannot load a `.ts` module. The reuse had to flow the other way, since TS importing a CJS `.js` already works here. The parse now lives in a new CJS `packages/shared/api/services/parseServiceUriRewrites.js`; `rewriteServiceUri.ts` imports it and re-exports through a typed wrapper, and `env-utils.js` requires it directly. The validator is now `parsed.length === entries.length` run through the parser itself, so the two cannot disagree by construction. All four divergent inputs in the evidence table are rejected; 10 tests added, including a contract test asserting the validator accepts a value if and only if every entry survives parsing.
 
 **[File: packages/shared/utils/env-utils.js:100-141]**
 
@@ -640,6 +759,8 @@ const serviceUriRewrite = () =>
 
 ### 8. A rewrite entry naming a default port matches a different set of addresses than written
 
+**Status:** ✅ Fixed — A scheme-less `host:443` or `host:80` is now rejected instead of guessed at. The ambiguity is detected by the two schemes disagreeing - `a.test:443` reads as port 443 under http and as no port under https, while `a.test:8080` reads identically under both. Checking `URL.port` directly does not work, because a default port is stripped rather than reported. Unambiguous forms (`a.test`, `a.test:8080`, and anything with an explicit scheme) are untouched. The review's scenario is now exactly inverted from the bug: with `http://a.test:443=https://new.test`, `http://a.test:443/orders` is redirected and `https://a.test/orders` is not. Because of the Issue 7 fix the bare form is not merely dropped - boot validation rejects the value, so the operator is told. 8 tests added.
+
 **[File: packages/shared/api/services/rewriteServiceUri.ts:12-13]**
 
 > **In plain terms:** If a developer writes the redirect using an address that
@@ -702,6 +823,12 @@ left-hand side and reject a bare `host:port`.
 
 ### 9. `NEXT_PUBLIC_ENVIRONMENT=local` on a deployed server disables every guard, silently
 
+**Status:** ⚠️ Mitigated — **Mitigated, not closed, and deliberately so.** The finding is right that nothing inside `env-utils.js` can tell a mislabelled server from a laptop - the signal lives in the same file as the values it gates. The two runtime signals that might have helped both fail: `NODE_ENV` is `production` for a local `next start` too, which is exactly how the fail-closed behaviour was verified for this PR, so failing closed on it would break that workflow; and the deploy is delegated to `Proofed/B2BDeployment@2.11.0`, so no VM-side check can be added from this repo.
+
+What was fixed is the word *silently*. A boot with `NEXT_PUBLIC_ENVIRONMENT=local` now emits one explicit `console.error` naming what is switched off - and since `getSentryDsn("local", ...)` returns `""`, that line is the only trace the misconfiguration leaves anywhere. It is emitted on the boot path only: `next.config.js` asks for the build group, where the deployed guards were never in scope, so warning there would fire on every build and train people to ignore it. 3 tests added, both directions pinned by mutation.
+
+The residual gap stands: a server whose `.env` says `local` still runs unguarded. Closing it properly is the deploy-time check already in Open Questions - confirm `NEXT_PUBLIC_ENVIRONMENT` on each VM.
+
 **[File: packages/shared/utils/env-utils.js:196-197 and :232]**
 
 > **In plain terms:** All the new protections are switched on by a single line in
@@ -756,6 +883,8 @@ deploy-time assertion that `local` never ships would also close it.
 ---
 
 ### 10. In production, a module-loading failure in the boot hook is swallowed and the server starts unvalidated
+
+**Status:** ✅ Fixed — The `await import("./env")` moved inside the `try`, so a module that cannot be loaded now produces the same refusal as a bad value. This also closes the gap the Tests section noted: both portals gain an `instrumentation.test.ts` (4 tests each), where there was none. The module-failure test is deliberately built so that it fires while the import is being **destructured** - the exact line that moved - rather than inside the validator, which would run inside the `try` either way; moving the import back out fails it. A success line is now logged on the happy path, so validation having been skipped is visible in boot logs rather than indistinguishable from it having passed.
 
 **[File: apps/creative-portal/instrumentation.ts:16, apps/customer-portal/instrumentation.ts:16]**
 
@@ -819,6 +948,8 @@ its absence is visible in boot logs.
 
 ### 11. Three option-handling branches that gate the whole feature have no test coverage
 
+**Status:** ✅ Fixed — 12 tests added: 4 covering `groups` narrowing (build-only, runtime-only, all, laptop) against a synthetic three-group schema, and 8 covering the allow-list — `false` / `0` / `no` / `off` must not skip, `1` / `true` / `TRUE` / `Yes` must.
+
 **[File: packages/shared/utils/env-utils.js:199, :221, :167-168]**
 
 > **In plain terms:** The parts of the new code that decide *which* checks run,
@@ -871,6 +1002,8 @@ group; `SKIP_ENV_VALIDATION=false` and `=0` do **not** skip; `=TRUE` and `=yes` 
 
 ### 12. Unsourced 16-character minimums on API keys are now boot-fatal
 
+**Status:** ✅ Fixed — The floor is gone from all four fields that carried it — `SERVICES_API_KEY`, `CLIENT_SERVICES_API_KEY`, `GOOGLE_CLIENT_SECRET` and `SENTRY_AUTH_TOKEN` (the finding named three; the fourth was on the Sentry token). `.required()` is kept, which is the part that is genuinely correct. Confirmed no consumer inspects length: `getAll.ts` sends the key as a header and `config/envs.ts` falls back to `""`. `SECRET_COOKIE_PASSWORD` keeps `.min(32)` because iron-session enforces it at runtime, and a test now pins that distinction in both directions. **This closes the corresponding Open Question** — there is no longer any need to measure the live key lengths before merging.
+
 **[File: apps/creative-portal/env.js:26-28, apps/customer-portal/env.js:24-26 and :38-40]**
 
 > **In plain terms:** The change invents a minimum length for several secret keys
@@ -914,6 +1047,8 @@ values first. Keep `.required()`, which is genuinely correct.
 
 ### 13. Feature-scoped Google credentials now stop the whole customer portal from booting
 
+**Status:** ✅ Fixed — All five Drive-only keys are now `.notRequired()`. Confirmed they are reached only from `utils/oAuth2Client.ts`, `api/googleDrive/*` and `api/auth/google/*`, so a missing one breaks the attach-from-Drive feature exactly as it did before this schema existed, rather than stopping the portal from booting. `NEXT_PUBLIC_GOOGLE_AUTH_CALLBACK` keeps its `httpUrl()` check for when it is set, since an OAuth redirect URI has to be absolute — verified that a relative value is still rejected. Note the exact-set test from the Issue 4 fix caught this change the moment it was made, which is the behaviour that test exists for.
+
 **[File: apps/customer-portal/env.js:37-40 and :55-58]**
 
 > **In plain terms:** Five settings are only needed by the "attach from Google
@@ -956,6 +1091,8 @@ Hotjar and Amplitude already get on the creative side (whose guard
 
 ### 14. The production change in `getAll.ts` has no test
 
+**Status:** ✅ Fixed — New `packages/shared/api/services/getAll.test.ts`, 5 tests. Mocked at the `config/envs` boundary because those values are read from `process.env` at import time. Covers both rewrite call sites separately, the version parse, what gets cached, and the client-API credential branch.
+
 **[File: packages/shared/api/services/getAll.ts:38-46 and :71]**
 
 > **In plain terms:** The new redirect helpers are well tested in isolation, but
@@ -994,6 +1131,8 @@ directory URL and each returned `service.uri` come back rewritten.
 ---
 
 ### 15. Control characters between the scheme and the address corrupt the rewritten path
+
+**Status:** ✅ Fixed — `rewriteServiceUri` now strips tab, LF and CR before both the host parse and the string surgery, so the two see the same input the WHATWG parser does. Normalising once at the top rather than inside `afterAuthority` is what makes them agree by construction. `"https:/\r/directory.internal/api/orders?version=25.3"` now yields `"https://localhost:8443/api/orders?version=25.3"` instead of putting `/directory.internal` back into the path. The identity guarantee is preserved deliberately: a URI that matches no rewrite is returned exactly as it arrived, control characters included, and a mutation returning the normalised form instead fails a test. 5 tests added.
 
 **[File: packages/shared/api/services/rewriteServiceUri.ts:58-65]**
 
@@ -1048,6 +1187,8 @@ what WHATWG does before parsing.
 
 ### 16. Documentation contradicts the code about which environments are guarded
 
+**Status:** ✅ Fixed — The `deployed:` comment in both `env.js` files said the guards apply to "stage or production"; they apply to devtest as well, which was the point of the change. It now names all three and says why devtest is included. The two `.env.example` lines the finding also cited need no edit: line 38/39 already named all three, and the `SKIP_ENV_VALIDATION` note saying it is ignored "when NEXT_PUBLIC_ENVIRONMENT is stage or production" became **true** as a result of the Issue 5 fix, rather than needing to be corrected.
+
 **[File: apps/creative-portal/env.js:83-84, apps/customer-portal/env.js:70-71, both `.env.example` files]**
 
 > **In plain terms:** The comments next to the new safety checks say they apply to
@@ -1086,6 +1227,8 @@ four places.
 
 ### 17. Two `.toLowerCase()` calls are dead, and the two tests naming them are vacuous
 
+**Status:** ✅ Fixed — Both tests retitled to describe what they actually assert, with a comment recording that the explicit `.toLowerCase()` is belt-and-braces over what WHATWG `new URL()` already does. The calls were kept as defensive.
+
 **[File: packages/shared/api/services/rewriteServiceUri.ts:17 and :124]**
 
 > **In plain terms:** Two lines guard against differences in capitalisation, but
@@ -1118,6 +1261,8 @@ tests to describe what they actually assert.
 ---
 
 ### 18. The comment justifying `process.exit(1)` is wrong for Next 14.1.1
+
+**Status:** ✅ Fixed — Corrected as part of the Issue 10 edit, since it is the comment inside the block that changed. It claimed Next keeps the process alive and still logs "Ready"; in 14.1.1 a thrown error propagates out of `getRequestHandlers` and `start-server` exits before "Ready" is reached. The comment now states the real reasons to keep the explicit exit - one clear line instead of a wrapped stack, and no dependence on Next's internal handling staying as it is - and notes that what Next's handling does *not* cover is the MODULE_NOT_FOUND case, which is why the import moved.
 
 **[File: apps/creative-portal/instrumentation.ts:21-25, apps/customer-portal/instrumentation.ts:21-25]**
 
@@ -1161,6 +1306,8 @@ of a wrapped stack trace, and independence from Next's internal error handling.
 
 ### 19. One missing variable is reported as two problems
 
+**Status:** ✅ Fixed — Resolved by the Issue 1 fix — the key is no longer `.required()` in either group, so it cannot be reported twice.
+
 **[File: apps/creative-portal/env.js:51 and :81]**
 
 > **In plain terms:** When one setting is missing, the error message lists it
@@ -1194,6 +1341,43 @@ groups are validated independently.
 ---
 
 ### 20. Three claims in the PR description and ticket do not match the base branch
+
+**Status:** ⚠️ Text prepared — **Confirmed, and the numbers have moved since the review.** The claims cannot be corrected from
+here - the GitHub MCP server is disconnected in this session and `gh` on this machine is not the
+GitHub CLI - so the replacement text is below for someone to paste into the PR body and the ticket.
+
+Measured against `e5e016eec`, the schema key deltas are:
+
+| | creative-portal | customer-portal |
+|---|---|---|
+| Removed | `NEXT_PUBLIC_MR_VERSION`, `TIPTAP_CLOUD_APP_ID`, `TIPTAP_CLOUD_APP_SECRET`, `TIPTAP_PRO_TOKEN` | `NEXT_PUBLIC_HOTJAR_SITE_ID`, `NEXT_PUBLIC_HOTJAR_VERSION`, `NEXT_PUBLIC_MR_VERSION` |
+| Added | `MFA_DISABLED`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN`, `SERVICES_URI_REWRITE` | `MFA_DISABLED`, `NODE_ENV`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN`, `SERVICES_URI_REWRITE` |
+
+Suggested replacement for the audit paragraph:
+
+> An audit of the env keys against real usage removed 4 dead keys from the
+> creative-portal schema (`NEXT_PUBLIC_MR_VERSION`, both `TIPTAP_CLOUD_*`
+> values, and `TIPTAP_PRO_TOKEN` - an install-time registry token that lives
+> in the root `.env`, which Next never loads) and dropped Hotjar from
+> customer-portal, since only the creative portal mounts that hook. The
+> Google keys were **not** moved: creative-portal never declared them, and
+> they remain customer-portal-only. Both schemas gained the keys they were
+> missing - `SERVICES_URI_REWRITE`, `MFA_DISABLED` and the three `SENTRY_*`
+> values - which is six additions on the customer side, not two.
+
+Three specific corrections:
+
+1. *"moved 5 Google keys off creative-portal"* - nothing was moved. The base
+   `apps/creative-portal/env.js` declares no Google key and its `.env.example`
+   is 14 lines with none.
+2. *"removed 5 dead keys"* - `NEXT_PUBLIC_WYSIWYG_LOGS` never existed anywhere
+   in the repo. `LOGTAIL_SOURCE_TOKEN` has since been restored as optional by
+   the Issue 21 fix, so the creative count is now 4.
+3. *"Added the 2 keys customer-portal genuinely needed"* - the schema gains
+   six. Two is right only for `.env.example`.
+
+The review's own evidence for this finding was slightly off and is corrected
+under **Corrections to this document** above.
 
 **[File: PR description / PP-2119 ticket]**
 
@@ -1235,6 +1419,10 @@ trustworthiness. Overstated counts undercut that.
 ---
 
 ### 21. Two loose ends the audit missed
+
+**Status:** ✅ Fixed — Both halves addressed. `apps/creative-portal/setup/api/utils/get-api-key.ts` is deleted - it read `process.env.REACT_APP_API_KEY`, which is in no schema and no template, and it had no importers.
+
+For Logtail, the contract turned out to be worse than "undocumented". `@logtail/next` reads `LOGTAIL_SOURCE_TOKEN`, while `packages/shared/scripts/bootstrap.mjs` fetches the token at boot and assigns it to `SENTRY_LOGTAIL_SOURCE_TOKEN` - a name nothing reads. So log shipping is almost certainly not working at all. That mismatch is at the base commit, untouched by this branch, and is **deliberately left alone**: renaming it would start sending logs to an external service, which is a decision rather than a cleanup. What this change does is declare `LOGTAIL_SOURCE_TOKEN` as optional in both schemas, document it in both templates, and record the mismatch beside the declaration so the next person finds it. Worth its own ticket.
 
 **[File: apps/creative-portal/setup/api/utils/get-api-key.ts:1, packages/shared/scripts/nextConfig.js:9]**
 
@@ -1278,6 +1466,8 @@ document it or remove `withLogtail`.
 ---
 
 ### 22. Stale comment and a latent trap in the shared yup mock
+
+**Status:** ✅ Fixed — The mock's comment claimed yup was "not installed in shared package", which this branch makes false. It now says the stub exists because the query-string helpers need only `boolean` and `mixed` - not because the real library is missing - and warns against deleting the alias on the assumption that it is now redundant. The matching note was added at the `require` in `env-utils.js`, which is load-bearing twice over: an ESM import would not resolve under plain Node when `next.config.js` loads the chain, and it would silently pick up the vitest alias's stub, leaving every schema validating nothing.
 
 **[File: packages/shared/__mocks__/yup.ts:1 and :16-17]**
 
@@ -1328,21 +1518,29 @@ The first two gate the merge.
   `ENVIRONMENT: "development"` to the deploy workflow — a different variable, but
   it shows `development` is the pipeline's vocabulary, and that string is not in
   `ENVIRONMENTS`. — `packages/shared/utils/env-utils.js:31`
-- **Does `Proofed/B2BDeployment/.github/workflows/build-upload.yml@2.11.0` export
-  `NEXT_PUBLIC_APP_VERSION` into the `next build` step?** Nothing in this repo
+- ✅ ~~**Does `Proofed/B2BDeployment/.github/workflows/build-upload.yml@2.11.0` export
+  `NEXT_PUBLIC_APP_VERSION` into the `next build` step?**~~ **Moot** — the key is
+  `.notRequired()` after the Issue 1 fix, so a build that does not set it
+  succeeds. Original question retained below for context. Nothing in this repo
   sets it, and it is now a hard build gate with no bypass (`SKIP_ENV_VALIDATION`
   is deliberately inert for stage/production). That repo is not readable from
   here. Circumstantial evidence that it *is* set: `nextConfig.js:88-90` feeds it
   to the Sentry release name, and working client-side Sentry in devtest implies
   it is present at build. That is inference, not proof. — `apps/creative-portal/next.config.js:11`
-- **Are the real `SERVICES_API_KEY`, `CLIENT_SERVICES_API_KEY` and
+- ✅ ~~**Are the real `SERVICES_API_KEY`, `CLIENT_SERVICES_API_KEY` and
   `GOOGLE_CLIENT_SECRET` values all at least 16 characters, and is
-  `NEXT_PUBLIC_GOOGLE_AUTH_CALLBACK` an absolute http(s) URL?** Any "no" is a
-  fleet-wide boot failure on the first deploy. — `apps/creative-portal/env.js:26-28`
-- **Do deployed devtest boxes currently run with `MFA_DISABLED=true`?** Determines
-  whether Issue 5 fires on the next devtest deploy or stays theoretical. — `apps/customer-portal/env.js:80-83`
-- **Is `SERVICES_URI_REWRITE` set on any deployed box today?** If so, that server
-  will refuse to boot after this merges. — `apps/creative-portal/env.js:86-92`
+  `NEXT_PUBLIC_GOOGLE_AUTH_CALLBACK` an absolute http(s) URL?**~~ **Moot.** The
+  `.min(16)` floors were dropped (Issue 12) and the Google keys made optional
+  (Issue 13), so none of these values can block a boot any more. The callback
+  is still shape-checked when set, but it is no longer required to be present.
+- ⚠️ **Do deployed devtest boxes currently run with `MFA_DISABLED=true`?** Still
+  open, and still worth answering before the next devtest deploy. The Issue 5 fix
+  means such a box is recoverable — `SKIP_ENV_VALIDATION=1` is honoured on devtest
+  now — but it will not boot until either that flag or the `MFA_DISABLED` value is
+  set. — `apps/customer-portal/env.js`
+- ⚠️ **Is `SERVICES_URI_REWRITE` set on any deployed box today?** Unchanged: such a
+  server will refuse to boot. On devtest the escape hatch now works; on stage and
+  production the value has to be removed. — `apps/creative-portal/env.js`
 - **Is there a supervisor that restarts the `StandaloneWebserver` task after
   `process.exit(1)`, and does the deploy gate on health rather than on the task
   starting?** If the task simply stops, a bad env becomes a silent, unalerted
@@ -1361,6 +1559,30 @@ The first two gate the merge.
 
 ---
 
+## Follow-up tickets this work surfaced
+
+Three things found while applying the fixes that are real, out of scope for this
+PR, and should not be lost.
+
+1. **Logtail has almost certainly never shipped a log.** `@logtail/next` reads
+   `LOGTAIL_SOURCE_TOKEN`, but `packages/shared/scripts/bootstrap.mjs:77` fetches
+   the token at boot and assigns it to `SENTRY_LOGTAIL_SOURCE_TOKEN`, which
+   nothing reads. Present at the base commit and untouched by this branch.
+   Deliberately not fixed here: correcting the name would start sending logs to
+   an external service, which is a decision rather than a cleanup. See Issue 21.
+2. **`creative-portal` does not build on a clean checkout of `develop`.**
+   `ERR_REQUIRE_ESM` from `@theme-ui/mdx` → `@mdx-js/react`. Confirmed
+   pre-existing by rebuilding with every change stashed. See Validation Checks.
+3. **The deploy pipeline should own `NEXT_PUBLIC_ENVIRONMENT`.** It currently
+   lives only on the VMs, which is what makes Issue 9 unclosable from this repo.
+   The workflow already knows the target — `deploy-creative-portal-devtest.yml:66`
+   passes `ENVIRONMENT: "development"` — so the value exists in CI and is simply
+   not wired to the app's variable. Fixing that in
+   `Proofed/B2BDeployment`'s `deploy-base.yml` would close Issue 9 by
+   construction.
+
+---
+
 ## Validation Checks
 
 | Check | Result | Notes |
@@ -1374,6 +1596,24 @@ The first two gate the merge.
 faithful run means the full unscoped monorepo suite, which needs a complete
 `yarn install` in a fresh worktree (`TIPTAP_PRO_TOKEN` was not available in the
 review shell) and would collide with the known local full-suite hang.
+
+**New finding while fixing: `creative-portal` does not build on this machine,
+and not because of this PR.** `npx turbo run build --filter=@proofed/creative-portal`
+fails with:
+
+```
+ERR_REQUIRE_ESM: require() of ES Module @mdx-js/react/index.js
+from @theme-ui/mdx/dist/theme-ui-mdx.cjs.prod.js is not supported
+```
+
+Confirmed pre-existing by stashing every change and rebuilding at
+`872b267e8`, the commit before the fixes: it fails identically. So this is a
+`@theme-ui/mdx` → `@mdx-js/react` dependency problem, not a regression from
+this branch. It does contradict the PR description's "Build successful before
+PR — both portals green on clean `.next`", so something in the toolchain or
+lockfile has drifted since that run. Worth its own ticket, and worth
+establishing before merge whether CI hits the same thing — nothing else
+validates this branch.
 
 **Separately: GitHub reports zero check runs on this PR.** The deploy workflows
 trigger only on `develop` pushes and `oms-*` / `cp-*` tags, so nothing validates
@@ -1407,12 +1647,13 @@ and helpers against real yup 0.32.11 and the Node WHATWG URL parser:
   hosts.
 - ✅ "Never echoes a value" is properly guarded for the creative portal, and the
   claim itself verified: 0 echoes across both schemas × 19 canary values.
-- ❌ The look-alike suffix security property is untested (Issue 3).
-- ❌ 18 of 19 customer-portal tests pass with the feature disabled (Issue 4).
-- ❌ The `groups` selection and the `SKIP_VALUES` allow-list are untested (Issue 11).
-- ❌ `getAll.ts` — the actual production integration — has no test (Issue 14).
-- ❌ No test for `instrumentation.ts`, so the `process.exit(1)` behaviour the
-  design rests on is unverified.
+- ✅ ~~The look-alike suffix security property is untested (Issue 3).~~ **Fixed** — suffix-direction test added; the `endsWith` and `includes` mutations are now both killed.
+- ✅ ~~18 of 19 customer-portal tests pass with the feature disabled (Issue 4).~~ **Fixed** — 18 of 19 now *fail* under the same mutation.
+- ✅ ~~The `groups` selection and the `SKIP_VALUES` allow-list are untested (Issue 11).~~ **Fixed** — 12 tests added, both mutations killed.
+- ✅ ~~`getAll.ts` — the actual production integration — has no test (Issue 14).~~ **Fixed** — new `getAll.test.ts`, both rewrite call sites pinned.
+- ✅ ~~No test for `instrumentation.ts`, so the `process.exit(1)` behaviour the
+  design rests on is unverified.~~ **Fixed** — 4 tests per portal, covering the
+  happy path, an invalid value, and a module that cannot be loaded.
 - ⚠️ Test-count inflation: 60 authored `it()` blocks expand to ~91 runtime tests;
   33 are per-key canary repetitions asserting one identical property.
 
@@ -1443,21 +1684,23 @@ and helpers against real yup 0.32.11 and the Node WHATWG URL parser:
 
 | Aspect | Status |
 |---|---|
-| Correctness | ⚠️ Core logic sound; 5 confirmed defects in guard/validation edge cases |
-| Regression risk | ❌ High — previously-soft failures are now process exits, and the deployed VM values are unverified |
-| Tests | ⚠️ Large genuine improvement, but 4 key properties are untested and 18 tests are vacuous |
+| Correctness | ✅ All 5 confirmed guard/validation defects fixed and pinned by mutation |
+| Regression risk | ⚠️ Much reduced — the invented length floors and the Drive-key requirements are gone, so the values that could have caused a fleet-wide boot failure no longer can. What remains is the VM `NEXT_PUBLIC_ENVIRONMENT` value |
+| Tests | ✅ All four untested properties covered, the vacuous tests fixed, and `getAll.ts` and `instrumentation.ts` given their first tests; +74 tests, each pinned by mutation |
 | Accessibility | n/a — no UI |
-| Error handling | ⚠️ Fail-closed works, but one silent fail-open path and no Sentry on boot failure |
-| Security | ⚠️ Net improvement over `develop`; guards are bypassable and the headline property is untested. `/security` was run by the author; re-run after the guard changes |
+| Error handling | ✅ The silent fail-open is closed (Issue 10) and success is now logged, so absent validation is visible. Sentry still cannot report a boot failure — `process.exit(1)` runs before `sentry.server.config` is imported |
+| Security | ✅ The bypasses are closed (Issues 2, 5) and the headline host-match property is now tested (Issue 3). One accepted residual: a server whose `.env` says `local` runs unguarded, and now says so. **Re-run `/security`** — the guard logic changed substantially |
 | Code quality | ✅ Conventions clean — Prettier, naming, reuse-first, `.js` precedent, no duplication |
-| Validation suite | ⏭️ Skipped — user opted out; **and no CI checks ran on this PR** |
+| Validation suite | ⚠️ Affected tests, typecheck and lint all green across the three workspaces. The full suite and a build were **not** run — `creative-portal` does not build on this machine for a reason that predates the branch (see Validation Checks). **No CI checks ran on this PR** |
 | Mergeable state | ✅ Clean (GitHub `mergeable_state: clean`) |
 
 ---
 
 ## Recommendation
 
-**Request changes.**
+**Request changes** — *original verdict. 21 of 22 findings have since been
+addressed; see Resolution Status. The remaining blocker is operational, not
+code.*
 
 This is careful, well-reasoned work that replaces validation which genuinely never
 ran. The direction is right and most of it should land. But it converts a broad set
@@ -1465,30 +1708,48 @@ of soft failures into process exits while the repo contains no evidence of what 
 deployment VMs actually hold, and the two safety properties the change is *named*
 for — the guards and the host match — are respectively bypassable and untested.
 
+**Update after the fixes.** Both named properties are closed: the guards no longer
+have a bypass, and the host match is pinned by mutation. The blast radius of the
+process exits is much smaller too — the invented `.min(16)` floors are gone and the
+Drive-only Google keys are optional, so the values most likely to fail on a real VM
+can no longer stop a boot. `NEXT_PUBLIC_APP_VERSION` is optional as well, which
+defuses the second Open Question. **One operational check still gates the merge:
+the `NEXT_PUBLIC_ENVIRONMENT` value on each VM.**
+
 **Before merge (blocking):**
 
-1. Answer the first two Open Questions — the VM `NEXT_PUBLIC_ENVIRONMENT` values
-   and whether the external build workflow exports `NEXT_PUBLIC_APP_VERSION`.
-   Either one going the wrong way is a fleet-wide outage or a hard-blocked deploy
-   with no bypass.
-2. Fix Issue 1 — give `NEXT_PUBLIC_APP_VERSION` a working default in both
-   `.env.example` files. Every reviewer hits this.
-3. Fix Issue 2 — validate `NEXT_PUBLIC_ENVIRONMENT` before the skip branch and
-   treat an unrecognised value as deployed.
-4. Fix Issue 3 — add the suffix-direction test for the host match.
-5. Fix Issue 4 — assert the throw in the customer-portal tests.
-6. Resolve Issue 5 — make the code and the documentation agree on whether devtest
-   is guarded, and confirm the devtest VMs before merging.
+1. ⚠️ **Still the one blocker.** Confirm `NEXT_PUBLIC_ENVIRONMENT` on each
+   devtest / stage / production VM is exactly `devtest`, `stage` or `production`
+   — lowercase, no surrounding whitespace. An unrecognised value now fails the
+   boot loudly rather than silently (Issue 2), and `local` boots unguarded while
+   saying so (Issue 9), so this is the value everything else hangs off.
+   ✅ ~~and whether the external build workflow exports `NEXT_PUBLIC_APP_VERSION`~~
+   — no longer blocking: the key is optional after the Issue 1 fix, so a build
+   that does not set it succeeds.
+2. ✅ ~~Fix Issue 1~~ — **done.** Template default added *and* the key relaxed
+   to `.notRequired()` in both groups, since every consumer already tolerates
+   its absence.
+3. ✅ ~~Fix Issue 2~~ — **done.** `NEXT_PUBLIC_ENVIRONMENT` is validated before
+   the skip branch; unknown and absent both count as deployed.
+4. ✅ ~~Fix Issue 3~~ — **done.** Suffix-direction test added.
+5. ✅ ~~Fix Issue 4~~ — **done.** The throw is asserted via
+   `expect.unreachable()`, in both portals rather than only the customer one.
+6. ✅ ~~Resolve Issue 5~~ — **done.** devtest is guarded, but keeps the escape
+   hatch the templates already documented. ⚠️ **Still needs confirming before
+   the next devtest deploy: does any devtest VM carry `MFA_DISABLED=true`?** If
+   so it now needs `SKIP_ENV_VALIDATION=1` alongside it, or the value removed.
 
 **Strongly recommended before merge:**
 
-7. Issue 6 (trim whitespace), Issue 12 (drop the unsourced `.min(16)`), and
-   Issue 7 (reuse the parser in the validator).
+7. ✅ ~~Issue 6 (trim whitespace)~~ and ✅ ~~Issue 7 (reuse the parser in the
+   validator)~~ — **both done.** ⬜ Issue 12 (drop the unsourced `.min(16)`)
+   remains, gated on measuring the real key lengths.
 8. Re-run `/security` after the guard changes, and run the full validation suite —
    nothing has validated this branch in CI.
 
-**Follow-ups (fine as separate tickets):** Issues 8, 10, 11, 13, 14, 15, and the
-low-severity items 16–22.
+**Follow-ups (fine as separate tickets):** ✅ ~~8~~, ✅ ~~10~~, ✅ ~~11~~, ✅ ~~13~~,
+✅ ~~14~~, ✅ ~~15~~, and the low-severity items ⬜ 16, ✅ ~~17~~, ✅ ~~18~~,
+✅ ~~19~~, ⚠️ 20, ✅ ~~21~~, ✅ ~~22~~.
 
 Two things worth saying plainly: the comments in this PR are better than most
 code in this repo, and the decision to build on yup rather than a bespoke
