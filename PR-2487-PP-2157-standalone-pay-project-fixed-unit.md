@@ -299,6 +299,20 @@ No CI check runs are attached to the PR.
 
 ---
 
+
+---
+
+## Update, 23 September 2026: the picker is now the active-project guard
+
+Two commits since this review.
+
+- `e1d78a0e4`: the project query asked for no status at all, so the `Status` header never reached OMS and **deactivated projects were selectable**. It now requests `"A"`. This became load-bearing the same day: PR #2486 removed the server-side project check on the create route, on the reviewer's point that the picker already decides which project can be named. The status reaches both the organization search and the group search, so the standalone **Charge** picker in this modal narrows too, which QA should exercise.
+- `ea2026df9` introduced that change behind a named constant; the PR reviewer asked for the literal at the single call site, so the constant is gone and a comment carries the meaning.
+
+Verified at `e1d78a0e4`: 99 modal tests plus the 2 shared `Select` tests pass, `tsc --noEmit` clean, ESLint clean, and `npx turbo run build --filter=@proofed/creative-portal` exits 0. The new test is mutation-checked: it fails if the status argument goes back to `undefined`.
+
+---
+
 ## Resolution
 
 | # | Issue | Severity | Status | Where |

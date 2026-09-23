@@ -2,12 +2,37 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2486
 **Jira:** https://proofed.atlassian.net/browse/PP-2156
-**Status:** Reviewed at `187d1a230`. Updated 23 Sep 2026: every finding was re-verified against that head, the Jira ticket has since been read (the requirements table below matches it), and Issues 1 to 4 are fixed in `a4034ea91`. See the update immediately below.
+**Status:** Reviewed at `187d1a230`. Two updates since, both dated 23 Sep 2026 and recorded below: the findings were fixed in `a4034ea91`, and then the whole server-side project check was removed in `379e00d40` after the PR reviewer pointed out that the picker already decides which project can be named. Issue 1 is therefore superseded rather than shipped. Head is now `35feac48e`.
+
 
 
 ---
 
-## Update, 23 September 2026
+## Update 2, 23 September 2026: the check was removed, not fixed
+
+The PR reviewer's position, accepted by the author: the modal only offers projects it has already fetched, so a per-create lookup against the group search is a round trip for a case the UI does not produce. `findActiveOrganisationGroup.ts` and its test are deleted, and the route (`379e00d40`) now forwards the pair as given. **Issue 1 and Issue 3 below describe code that no longer exists.**
+
+What that costs, and what covers it:
+
+- The premise had to be made true first. The picker fetched its list with **no** status filter, so the `Status` header never reached OMS and deactivated projects were selectable. PP-2157 (`e1d78a0e4`) now requests status `"A"`, which reaches both the organization search and the group search, so the standalone **Charge** picker in the same modal narrows with it. That is worth a QA pass on both flows.
+- A direct API call can still name a deactivated or another client's project. Nothing is stored today, because OMS discards the fields, and the exposure begins at OMS Rev 4.03. Recorded on the PR rather than fixed.
+- The ticket's requirement 2.1 ("validate against an active, existing organization group") is now met by the UI rather than the API, and the QA testing note "reject a project id that does not exist or is inactive" is a UI check.
+
+What survives from the first update: the schema still accepts the pair only together, refuses it on a job-linked adjustment, and takes positive integer ids only (Issue 1's second half). Issue 4's logging fix stands. Issue 2's test rename stands. Issues 5 and 6 are still open and are shared with the standalone charge twin.
+
+### Verification at head `35feac48e`
+
+| Check | Result |
+| --- | --- |
+| Tests, `api/compensations` | 61 passed |
+| `tsc --noEmit`, creative portal | clean |
+| ESLint, changed folders | 0 errors, 0 warnings |
+| `npx turbo run build --filter=@proofed/creative-portal` | 2 tasks successful, exit 0 |
+| `/security` | manual pass; auth unchanged (`authNeeded: true`, `requiredRoles: []` and no CSRF both pre-existing and shared with the charge twin), validation tighter than before, ids only in logs, no secrets or new dependencies. One integrity note: the direct-API case above. |
+
+---
+
+## Update 1, 23 September 2026
 
 ### Fixes applied in `a4034ea91` (pushed to the PR branch)
 
@@ -88,7 +113,7 @@ One asymmetry the PR creates, worth a deliberate decision rather than a silent d
 
 ## Issues Found
 
-### 1. The cross-organization check has no local guard, and `organizationId: 0` removes the remote one (fixed in `a4034ea91`)
+### 1. The cross-organization check has no local guard, and `organizationId: 0` removes the remote one (fixed in `a4034ea91`, then superseded by `379e00d40`)
 
 **[File: apps/creative-portal/api/utils/organisationGroups/findActiveOrganisationGroup.ts:43]**
 
@@ -179,7 +204,7 @@ Add a `findActiveOrganisationGroup` test where the returned list contains the id
 
 **Fix:** Delete it, or rename it to what it can prove (e.g. "skips the project lookup when no project is supplied, even with a jobId").
 
-### 3. The `active !== false` branch is unpinned — a future "tightening" would break live projects silently (fixed in `a4034ea91`)
+### 3. The `active !== false` branch is unpinned — a future "tightening" would break live projects silently (fixed in `a4034ea91`, then superseded by `379e00d40`)
 
 **[File: apps/creative-portal/api/utils/organisationGroups/findActiveOrganisationGroup.ts:46]**
 
