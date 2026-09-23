@@ -4,7 +4,35 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-2066
 **Status:** Code Review
 
-Reviewed at head `c044fb09c`.
+Reviewed at head `c044fb09c`. Re-verified 23 September 2026 at the same head (see Verification).
+
+---
+
+## Verification (23 September 2026)
+
+The PR has not moved since this review: head is still `c044fb09c` (PR last updated 15 September). Every claim below was re-checked against the code on that head.
+
+| Claim | Outcome |
+| --- | --- |
+| Three render states: collapsed → `null`, loading → skeleton, errored → `null` | Confirmed at `OrderSummary/index.tsx:134` and `:138-140`, the exact lines cited |
+| Issue 1: labels and column split hand-copied in the skeleton | Confirmed. `OrderSummarySkeleton/index.tsx:23-44` against `OrderAndBriefDetails/utils.tsx:86, 96-99, 103, 105, 115` — every cited line is accurate |
+| No test ties the two sets of labels together | Confirmed. The label test asserts four literals typed in the test file itself, and the loaded-state test mocks the real panel, so a rename in `getOrderDetailLists` would not fail anything |
+| Conditional rows left out of the skeleton, and marked `hidden` in the real panel | Confirmed for Created By, PO ID, Size and Files |
+| Skeleton is `aria-hidden`, nothing announces loading | Confirmed at line 60; no `aria-busy`, `aria-live` or visually-hidden text anywhere in these partials |
+| Hover prefetch still has no `staleTime` | Confirmed at `useOrderPrefetch.ts:16-19` |
+| React Query 4.36.1 (the version the error-state reasoning relies on) | Confirmed as the installed version |
+| Reuses `SkeletonBox`, already imported by `OrderAndBriefDetails/utils.tsx` | Confirmed, same import in both |
+| `Content` is a flex column with `gap: 1rem`, so the service bars do not touch | Confirmed at `OrderSummarySection/styles.ts:17-20` |
+| `useDeepLinkMonth` clears the latch when the deep link goes away | Confirmed in the diff, four lines of code |
+| 8 tests in `OrderSummary/index.test.tsx`, 2 new in `useDeepLinkMonth.test.ts` | Both counts confirmed |
+| Jira requirements table | Confirmed against the ticket, including that parallelising and de-duplicating are explicit "not prescriptive" suggestions, that the repeated calls come from a shared cache key with no `staleTime`, and that the 8 September update adds the cross-month search fix |
+
+Two things this review had left open are now settled:
+
+- **Validation was run.** `yarn app:customer-portal test --run OrderTable orders` gives 22 files, 284 passed, exactly the numbers the PR description claims. The original review had recorded these as unverified.
+- **Base drift.** The branch is 3 ahead and 23 behind `develop`, with no merge conflicts, and GitHub still reports the PR mergeable and clean. A fresh CI run on the current base is still worth having before merge.
+
+Nothing in the original review needed correcting.
 
 ---
 
@@ -76,6 +104,8 @@ export const ORDER_FIELD_LABELS = {
 } as const;
 ```
 
+**Cheaper alternative (added 23 September):** sharing the constants removes the duplicated strings but not the duplicated structure — the skeleton deliberately lists only the always-present rows, while `getOrderDetailLists` also builds the conditional ones, so the two files stay coupled by hand either way. A test that renders both states and asserts the skeleton's labels against the loaded panel's labels catches the drift this issue describes, without either file importing the other. Either route closes the gap; neither is required to merge.
+
 ---
 
 ## Open Questions
@@ -90,12 +120,10 @@ export const ORDER_FIELD_LABELS = {
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| `npx turbo run test` | Skipped | Skipped: user opted out |
-| `npx turbo run typecheck` | Skipped | Skipped: user opted out |
-| `npx turbo run lint` | Skipped | Skipped: user opted out |
-| `npx turbo run build` | Skipped | Skipped: user opted out |
-
-The PR description reports scoped runs on `@proofed/customer-portal`: `test OrderTable orders` 284 passed; `typecheck` and `lint --max-warnings 0` clean. I did not verify these.
+| `yarn app:customer-portal test --run OrderTable orders` | ✅ Passed | Run 23 Sep 2026: 22 files, 284 passed, matching the PR description |
+| `npx turbo run typecheck` | Not run | The PR reports a clean scoped run on `@proofed/customer-portal` |
+| `npx turbo run lint` | Not run | The PR reports `lint --max-warnings 0` clean |
+| `npx turbo run build` | Not run | Skipped: user opted out |
 
 ---
 
@@ -105,7 +133,6 @@ The PR description reports scoped runs on `@proofed/customer-portal`: `test Orde
 - ✅ `useDeepLinkMonth.test.ts`: two new tests for the repeat deep link (re-sync, and `isResolved` false while pending). According to the PR, both fail on `develop`.
 - ⚠️ The label assertions only check the skeleton's own hardcoded strings, so they would not catch the drift in Issue 1.
 - ⚠️ No test for the collapse → re-expand cycle on an already-loaded row (panel back instantly, no skeleton flash). This is low risk: the component stays mounted and the query stays cached.
-- Validation suite not run (user opted out).
 
 ### Suggested manual QA script
 
@@ -123,13 +150,13 @@ The PR description reports scoped runs on `@proofed/customer-portal`: `test Orde
 | --- | --- |
 | Correctness | ✅ |
 | Regression risk | ✅ Low |
-| Tests | ✅ |
+| Tests | ✅ (284 passed, verified 23 Sep) |
 | Accessibility | ⚠️ (no loading announcement; pre-existing, see Open Questions) |
 | Error handling | ✅ (error state handled; UX question open) |
 | Security | ✅ (no new inputs, requests or data exposure) |
 | Code quality | ✅ (one low duplication finding) |
-| Validation suite | Skipped: user opted out |
-| Mergeable state | ✅ Clean (GitHub `CLEAN`) |
+| Validation suite | Partial: scoped tests run and passed; typecheck, lint and build not run here |
+| Mergeable state | ✅ Clean (GitHub `CLEAN`, 23 behind `develop`, no conflicts) |
 
 ---
 
@@ -137,7 +164,7 @@ The PR description reports scoped runs on `@proofed/customer-portal`: `test Orde
 
 **Approve**
 
-1. Optional: share the order-field labels between the skeleton and `getOrderDetailLists` (Issue 1).
+1. Optional: close the label duplication (Issue 1), either by sharing the labels or by adding a test that compares the two states.
 2. Get a product answer on the failed-load panel and the screen-reader announcement (Open Questions).
 3. Raise follow-up tickets for the fetch-chain parallelisation and the hover-prefetch `staleTime`, if they don't already exist.
-4. Validation was not run in this review. Confirm CI is green before merging.
+4. Scoped tests pass on the PR head. Confirm CI is green on the current `develop` base before merging.
