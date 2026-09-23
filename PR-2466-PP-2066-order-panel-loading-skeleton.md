@@ -4,7 +4,7 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-2066
 **Status:** Code Review
 
-Reviewed at head `c044fb09c`. Re-verified 23 September 2026 at the same head (see Verification).
+Reviewed at head `c044fb09c`. Re-verified 23 September 2026 at the same head, with the full validation suite run (see Verification).
 
 ---
 
@@ -29,8 +29,8 @@ The PR has not moved since this review: head is still `c044fb09c` (PR last updat
 
 Two things this review had left open are now settled:
 
-- **Validation was run.** `yarn app:customer-portal test --run OrderTable orders` gives 22 files, 284 passed, exactly the numbers the PR description claims. The original review had recorded these as unverified.
-- **Base drift.** The branch is 3 ahead and 23 behind `develop`, with no merge conflicts, and GitHub still reports the PR mergeable and clean. A fresh CI run on the current base is still worth having before merge.
+- **Validation ran clean.** The whole `@proofed/customer-portal` suite passes, along with typecheck, lint at `--max-warnings 0`, and a production build. Numbers in Validation Checks below. The original review had recorded these as skipped and unverified.
+- **Base drift.** The branch is 3 ahead and 23 behind `develop`, with no merge conflicts, and GitHub still reports the PR mergeable and clean. The build above ran on the PR head, not on a merge with current `develop`, so a green CI run on the current base is still worth having.
 
 Nothing in the original review needed correcting.
 
@@ -68,7 +68,7 @@ Lenses applied (small diff, 5 files): correctness, regressions/contract, reuse/d
 
 ## Issues Found
 
-### 1. Skeleton field labels are a second copy of the real panel's labels
+### 1. Skeleton field labels are a second copy of the real panel's labels (DRY)
 
 **[File: apps/customer-portal/components/molecules/tables/OrderTable/partials/OrderSummarySkeleton/index.tsx]**
 
@@ -88,6 +88,8 @@ Lenses applied (small diff, 5 files): correctness, regressions/contract, reuse/d
 
 **Impact:** Label drift between the loading and loaded states after any future rename. A reviewer has to remember to update two files.
 
+**Scope of the duplication (added 23 September):** this is a DRY finding on the **strings only**. The label text is one piece of knowledge written in two files, which is what drifts on a rename. The surrounding structure is not: the skeleton deliberately lists only the always-present rows, while `getOrderDetailLists` also builds the conditional ones and marks them `hidden`. Those are two different decisions that happen to overlap, so no shared constant removes the need to keep them in step by hand.
+
 **Fix:** Move the labels into an `OrderAndBriefDetails/consts.ts` (e.g. `ORDER_FIELD_LABELS`), then use them from both `getOrderDetailLists` and the skeleton:
 
 ```typescript
@@ -104,7 +106,7 @@ export const ORDER_FIELD_LABELS = {
 } as const;
 ```
 
-**Cheaper alternative (added 23 September):** sharing the constants removes the duplicated strings but not the duplicated structure — the skeleton deliberately lists only the always-present rows, while `getOrderDetailLists` also builds the conditional ones, so the two files stay coupled by hand either way. A test that renders both states and asserts the skeleton's labels against the loaded panel's labels catches the drift this issue describes, without either file importing the other. Either route closes the gap; neither is required to merge.
+**Cheaper alternative:** a test that renders both states and asserts the skeleton's labels against the loaded panel's labels catches the same drift without either file importing the other, and it closes the test gap noted below. Either route works; neither is required to merge.
 
 ---
 
@@ -118,19 +120,23 @@ export const ORDER_FIELD_LABELS = {
 
 ## Validation Checks
 
+All run 23 September 2026 on head `c044fb09c`, scoped to `@proofed/customer-portal`.
+
 | Check | Result | Notes |
 | --- | --- | --- |
-| `yarn app:customer-portal test --run OrderTable orders` | ✅ Passed | Run 23 Sep 2026: 22 files, 284 passed, matching the PR description |
-| `npx turbo run typecheck` | Not run | The PR reports a clean scoped run on `@proofed/customer-portal` |
-| `npx turbo run lint` | Not run | The PR reports `lint --max-warnings 0` clean |
-| `npx turbo run build` | Not run | Skipped: user opted out |
+| `turbo run test` | ✅ Passed | 47 files, 478 tests passed, 0 failures |
+| `turbo run typecheck` | ✅ Passed | `tsc --noEmit` clean |
+| `turbo run lint` | ✅ Passed | `eslint --max-warnings 0` clean |
+| `turbo run build` | ✅ Passed | Production build succeeded in 616s, no type or build warnings |
+
+The scoped run named in the PR description (`test OrderTable orders`, 284 passed across 22 files) also reproduces exactly.
 
 ---
 
 ## Tests
 
 - ✅ `OrderSummary/index.test.tsx` (new, 8 tests). It covers all three states, the skeleton → panel transition, the error state, collapsed-with-cached-data, always-present labels, left-out conditional rows, and the section headings.
-- ✅ `useDeepLinkMonth.test.ts`: two new tests for the repeat deep link (re-sync, and `isResolved` false while pending). According to the PR, both fail on `develop`.
+- ✅ `useDeepLinkMonth.test.ts`: 11 tests, two of them new for the repeat deep link (re-sync, and `isResolved` false while pending). According to the PR, both fail on `develop`.
 - ⚠️ The label assertions only check the skeleton's own hardcoded strings, so they would not catch the drift in Issue 1.
 - ⚠️ No test for the collapse → re-expand cycle on an already-loaded row (panel back instantly, no skeleton flash). This is low risk: the component stays mounted and the query stays cached.
 
@@ -150,12 +156,12 @@ export const ORDER_FIELD_LABELS = {
 | --- | --- |
 | Correctness | ✅ |
 | Regression risk | ✅ Low |
-| Tests | ✅ (284 passed, verified 23 Sep) |
+| Tests | ✅ (478 passed across 47 files) |
 | Accessibility | ⚠️ (no loading announcement; pre-existing, see Open Questions) |
 | Error handling | ✅ (error state handled; UX question open) |
 | Security | ✅ (no new inputs, requests or data exposure) |
-| Code quality | ✅ (one low duplication finding) |
-| Validation suite | Partial: scoped tests run and passed; typecheck, lint and build not run here |
+| Code quality | ✅ (one low DRY finding on the field labels) |
+| Validation suite | ✅ Test, typecheck, lint and build all pass |
 | Mergeable state | ✅ Clean (GitHub `CLEAN`, 23 behind `develop`, no conflicts) |
 
 ---
@@ -167,4 +173,4 @@ export const ORDER_FIELD_LABELS = {
 1. Optional: close the label duplication (Issue 1), either by sharing the labels or by adding a test that compares the two states.
 2. Get a product answer on the failed-load panel and the screen-reader announcement (Open Questions).
 3. Raise follow-up tickets for the fetch-chain parallelisation and the hover-prefetch `staleTime`, if they don't already exist.
-4. Scoped tests pass on the PR head. Confirm CI is green on the current `develop` base before merging.
+4. Validation passes on the PR head. Confirm CI is green on the current `develop` base before merging, since the branch is 23 commits behind.
