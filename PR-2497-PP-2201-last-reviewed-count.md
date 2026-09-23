@@ -3,6 +3,7 @@
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2497
 **Jira:** https://proofed.atlassian.net/browse/PP-2201
 **Status:** In Progress (Bug, Highest)
+**Commits reviewed:** cf37a88b0, edae837c7
 
 > Self-review of my own change. Lenses run: correctness/logic, regressions,
 > error handling, React/performance, type safety, test quality, reuse and
@@ -17,32 +18,51 @@
 1. **The count now matches what Adam asked for.** Adam's own example
    (Nandeep E-R-Re-QA on 29OctPartner) goes from "8 jobs" to "1 job", and old
    unreviewed jobs no longer inflate the number (ca we on 21501: 6 to 4).
-2. **If the review history fails to load, the hover can claim an editor was never
+2. **The ticket description still describes an older rule.** The code follows
+   what Adam agreed in his Jira comment and in Slack, not the description. Until
+   the description is updated, QA may test the wrong numbers.
+3. **If the review history fails to load, the hover can claim an editor was never
    reviewed and show a job count with it.** The "never reviewed" part already
    happened before this change; the count now makes it look trustworthy. It only
    happens when that request fails.
-3. **In a rare case the two halves of the line can describe different reviews.**
-   If someone reviews an older job after a newer one, "N jobs" counts from the
-   newer job while "days ago" is the age of the latest review written.
 4. **Storybook shows a different figure from its description.** Developer-facing
    only; users are not affected.
 
 ---
 
+## Requirement history
+
+The rule changed several times. The PR follows the latest agreed version, which
+is not the one in the ticket description.
+
+| When | Source | What it says |
+|---|---|---|
+| PP-2100 (released) | QA Finding 3, Rafał | A failed job search shows "-", never a plausible wrong number |
+| PP-2100 (released) | Adam, 18 Sep | Canceled orders do not count ("the numbers need to match") |
+| PP-2201 | Ticket description | Leave the reviewed job out, count the hovered job, count canceled orders |
+| PP-2201 | Adam, comment 76584 | The opposite convention: "don't count the current job; count back to and including the reviewed job" |
+| PP-2201 | Slack, after commit cf37a88b0 | Adam rejected "0 jobs" where the newest job was reviewed (his example should read "1 job"). Canceled orders count only **where feedback was provided** (as in the feedback dots) |
+| PP-2201 | Commit edae837c7 + comment 76601 | Implements the Slack rule. Adam has not replied on Jira yet |
+
+The description and comment 76584 give the same number in the ticket's agreed
+cases (1, 2 and 6 jobs). They differ when the job being viewed is not newer than
+the last review, which is exactly Adam's example.
+
+---
+
 ## Jira Requirements vs Implementation
 
-| Jira Requirement | PR Implementation | Status |
+| Requirement (source) | PR Implementation | Status |
 |---|---|---|
-| Count dated from the last review, not all unscored jobs | `countJobsSinceLastReview` anchors on the highest reviewed `jobId` from the feedback | ✅ Addressed |
-| Counting convention (Adam, comment 76584 and Slack): include the reviewed job, leave out the current job | Adds 1 for the reviewed job, excludes jobs on the viewed order | ✅ Addressed |
-| Case 1: current job only, never reviewed → "Not yet reviewed" | No suffix when there is no other job | ✅ Addressed |
-| Case 2: never reviewed, several jobs → "Not yet reviewed (X job/s)" | Suffix with X excluding the current job | ✅ Addressed |
-| Cases 3 to 5: 1, 2 and 6 jobs | Covered by tests | ✅ Addressed |
-| "M days ago" unchanged | `calculateDaysSinceLastFeedback` untouched | ✅ Addressed (see Issue 2) |
-| Singular "1 job" | `formatJobCount` | ✅ Addressed |
-| Canceled orders where feedback was provided count (Adam) | Reviewed job taken from feedback, which includes canceled orders | ✅ Addressed |
-| Canceled orders in general (ticket description) | Not possible: OMS Job Search accepts only Live or Completed | ⚠️ Partial (Adam narrowed it to orders with feedback) |
-| Never-reviewed Figma treatment | Ticket text used, not the red Figma state | ⚠️ Partial (open decision on the ticket) |
+| Count dated from the last review, not all unscored jobs (description) | Anchors on the highest reviewed `jobId` from the feedback | ✅ Addressed |
+| Counting rule (Adam, 76584 + Slack) | Counts the reviewed job plus later jobs, leaves out the current order's job | ⚠️ Matches Adam, **contradicts the description**, which still says to count the hovered job and leave the reviewed job out. Description needs updating before QA |
+| Cases 1 to 5: Not yet reviewed, (X jobs), 1, 2 and 6 jobs (description) | Covered by tests; same result under both rules | ✅ Addressed |
+| Case 6: days since the last completed review (description) | `calculateDaysSinceLastFeedback` uses the newest review written, unchanged | ✅ Addressed |
+| Singular "1 job" (description) | `formatJobCount` | ✅ Addressed |
+| Canceled orders (description: all; Slack: only where feedback was provided) | The reviewed job comes from the feedback, so reviews on canceled orders count. Canceled-order jobs without feedback cannot be fetched (OMS Job Search section 25.1 accepts only Live or Completed) | ⚠️ Meets the Slack rule; **agreed in Slack only**, not written in Jira |
+| Never reviewed: "(X jobs)" (description) | X leaves out the current job, following Adam's rule | ⚠️ Consistent with Adam's rule but **not written anywhere in Jira** |
+| Never-reviewed design (Figma red "Never reviewed" or ticket text) | Ticket text used | ⚠️ Still Adam's open decision (76584) |
+| Profile order history must match if canceled orders count (description notes) | Not touched | ⚠️ Only relevant if canceled jobs without feedback are ever counted |
 
 No scope creep: all changes are inside `EditorFeedback`.
 
@@ -54,10 +74,12 @@ The counting rule moves out of the JSX into a pure helper,
 `countJobsSinceLastReview(jobs, userFeedbacks, currentOrderId)` in `utils.ts`.
 The component keeps its existing data sources (Live and Complete job searches by
 user, plus job assessments), drops the `!reviewScore` filter so the whole history
-is available, and passes the viewed `orderId`. The QA-approved "-" fallback for a
-failed job search is unchanged. The helper and `formatJobCount` are used only by
-this component, and the component's props are unchanged, so there is no
-cross-component regression surface.
+is available, and passes the viewed `orderId`. Taking the reviewed job from the
+assessments is what lets reviews on canceled orders count without a backend
+change. The QA-approved "-" fallback for a failed job search is unchanged. The
+helper and `formatJobCount` are used only by this component, and the
+component's props are unchanged, so there is no cross-component regression
+surface.
 
 ---
 
@@ -96,7 +118,7 @@ cross-component regression surface.
 
 With empty feedback, `utils.ts` returns `otherJobs.length`, so any editor with other jobs gets a suffix.
 
-**Impact:** a misleading figure on a surface used to decide who to review next. Before this PR the same failure showed a bare "Not yet reviewed".
+**Impact:** a misleading figure on a surface used to decide who to review next. QA already rejected this pattern for the job searches on PP-2100 (Finding 3: "showing a plausible wrong number on failure"), which is why a failed job search shows "-". The review-history request is the other half of the same line and has no such guard.
 
 **Fix:** expose the error state from `useUserFeedbacks` and treat a failed load like a failed job search:
 
@@ -107,35 +129,7 @@ return { userFeedbacks, feedbackItems, isLoadingUserFeedbacks: isLoading, isUser
 
 Then set `jobCount` to `"-"` when the feedback failed with nothing cached, and add a test for it. The hook is shared, so this can be a small follow-up.
 
-### 2. "N jobs" and "days ago" can come from different reviews
-
-**[File: apps/creative-portal/components/molecules/UserPreview/partials/EditorFeedback/index.tsx]**
-
-> **In plain terms:** If a reviewer scores an older job after a newer one, the hover counts jobs from the newer review but shows the age of the later-written one. The line still looks consistent, so nobody would notice, but the two numbers describe different reviews.
-
-**Function/Class:** EditorFeedback, countJobsSinceLastReview, calculateDaysSinceLastFeedback
-
-**Severity:** low
-
-**Confidence:** high
-
-**Steps to reproduce:**
-
-1. Pick an editor with two jobs in one project, A (older) and B (newer).
-2. Review B, then a few days later review A.
-3. Hover the editor on a newer job.
-4. **Expected:** both numbers refer to the same review.
-5. **Actual:** "N jobs" counts from B, "days ago" is the age of the review of A.
-
-**Problem:** the count anchors on the highest reviewed job ID, while the days use the newest assessment by assessment ID.
-
-**Evidence:** `utils.ts` `Math.max(...userFeedbacks.map((feedback) => feedback.jobId))` versus `utils.ts:9` `const lastReviewedFeedback = userFeedbacks.at(-1);`, where `hooks/useUserFeedbacks.ts:34` sorts by assessment `id`. The test "dates the count from the newest reviewed job, not the newest feedback" builds exactly this case (`reviewedOn(102, 100)`) and checks only the count.
-
-**Impact:** rare and small; reviews are almost always written in job order. The ticket says the days figure stays unchanged, which is why it was left alone.
-
-**Fix:** product call. If both should mean "the last reviewed job", date the days from the assessment whose `jobId` is the maximum. Otherwise leave as is.
-
-### 3. Storybook "Default" description no longer matches the rendered count
+### 2. Storybook "Default" description no longer matches the rendered count
 
 **[File: apps/creative-portal/components/molecules/UserPreview/index.stories.tsx]**
 
@@ -161,6 +155,7 @@ Then set `jobCount` to `"-"` when the feedback failed with nothing cached, and a
 
 ## Open Questions
 
+- **Should "N jobs" and "days ago" refer to the same review?** The count starts from the highest reviewed job ID; the days figure is the age of the newest review written, which is what case 6 in the ticket asks for. They differ only when an older job is reviewed after a newer one (the test "dates the count from the newest reviewed job, not the newest feedback" builds this case). Not a defect against the ticket; a question for Adam. `utils.ts:9`
 - Can the hover be opened on an order that is neither Live nor Complete (canceled, on hold)? If so, when the editor's job on that order is also their last reviewed job, the job search cannot return it and the hover would show "1 job" instead of "0 jobs". Fixing it would need the order's own job list. `utils.ts:43`
 - A workflow can give the same editor two jobs of one type on one order. All of them are left out as "current". Is that the intended reading of "the current job"? `utils.ts:34`
 - For Review (QA) jobs, is `JobAssessment.jobId` the editor's own review job ID (comparable with the search results)? The BFF passes it through, so this depends on the OMS contract.
@@ -174,22 +169,21 @@ Then set `jobCount` to `"-"` when the feedback failed with nothing cached, and a
 | `npx turbo run test` | Skipped | User opted out. Affected tests run during development: 37/37 pass in `EditorFeedback` |
 | `npx turbo run typecheck` | Skipped | User opted out. Passed for `@proofed/creative-portal` on commit edae837c7 during development |
 | `npx turbo run lint` | Skipped | User opted out. ESLint and Prettier clean on the changed folder |
-| `npx turbo run build` | Skipped | User opted out. Last build ran clean on commit cf37a88b0 only |
+| `npx turbo run build` | Skipped | User opted out. Last build ran clean on commit cf37a88b0 only; not re-run on edae837c7 |
 
 ---
 
 ## Tests
 
 - ✅ Unit tests for the new helper (`utils.test.ts`) and the component (`index.test.tsx`), 37 passing.
-- ✅ Every agreed ticket case covered: 1, 2, 6 jobs; newest job reviewed and viewed from an older job; viewing the reviewed job itself; stale unscored jobs; reviewed job missing from the search (canceled order); never-reviewed count and singular.
+- ✅ Every agreed ticket case covered: 1, 2, 6 jobs; newest job reviewed and viewed from an older job (Adam's example); viewing the reviewed job itself; stale unscored jobs; reviewed job missing from the search (canceled order); never-reviewed count and singular.
 - ✅ The existing "-" behaviour for a failed job search is still tested.
 - ❌ No test for a failed review-history request (Issue 1).
-- ❌ Issue 2's test checks the count but not the days figure.
 - ⚠️ No test where the reviewed job is on the current order and newer jobs exist on other orders (logic reads correctly).
 
 ### Suggested manual QA script
 
-On b2btest after merge, hover the editor name in the orders table and in the order side panel:
+Test against Adam's rule (comment 76584 + Slack), not the current description. On b2btest after merge, hover the editor name in the orders table and in the order side panel:
 
 1. Nandeep E-R-Re-QA on any live 29OctPartner order: "1 job / 15 days ago" (Adam's example).
 2. ca we on 21501: "4 jobs / 203 days ago".
@@ -205,7 +199,8 @@ On b2btest after merge, hover the editor name in the orders table and in the ord
 
 | Aspect | Status |
 |---|---|
-| Correctness | ✅ |
+| Correctness | ✅ (against Adam's agreed rule) |
+| Requirements traceability | ⚠️ Jira description out of date |
 | Regression risk | ✅ Low |
 | Tests | ⚠️ (Issue 1 path untested) |
 | Accessibility | n/a |
@@ -219,9 +214,12 @@ On b2btest after merge, hover the editor name in the orders table and in the ord
 
 ## Recommendation
 
-**Approve with suggestions**
+**Approve with suggestions.** The code is right; the paperwork is not.
 
-1. Update the Storybook seed data so the Default story matches its description (Issue 3); a two-line change.
-2. Decide whether to handle a failed review-history request in this PR or a follow-up (Issue 1).
-3. Leave Issue 2 unless Adam wants both numbers tied to the same review.
-4. Validation suite was not run as part of this review; re-run test, typecheck, lint and build before merging.
+Before merge:
+
+1. **Adam updates the Jira description** to the Slack rule, or confirms it on Jira: count back to and including the reviewed job, leave out the current job; canceled orders count only where feedback was provided; never-reviewed "(X jobs)" leaves out the current job. This is the main blocker for QA.
+2. Fix the Storybook seed data (Issue 2); a two-line change.
+3. Decide on Issue 1: fix in this PR or a follow-up.
+4. Add a reviewer (none assigned yet) and re-run the build on edae837c7.
+5. Adam decides the never-reviewed design (Figma red "Never reviewed" or the ticket text).
