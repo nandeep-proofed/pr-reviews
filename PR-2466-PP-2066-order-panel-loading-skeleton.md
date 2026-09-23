@@ -4,19 +4,19 @@
 **Jira:** https://proofed.atlassian.net/browse/PP-2066
 **Status:** Code Review
 
-Reviewed at head `c044fb09c`. Re-verified 23 September 2026 at the same head, with the full validation suite run (see Verification).
+Reviewed at head `c044fb09c`. Re-verified 23 September 2026 with the full validation suite; Issue 1 fixed the same day at `be7130653`.
 
 ---
 
 ## Verification (23 September 2026)
 
-The PR has not moved since this review: head is still `c044fb09c` (PR last updated 15 September). Every claim below was re-checked against the code on that head.
+Re-checked at `c044fb09c`, the head this review was written against. Every claim held.
 
 | Claim | Outcome |
 | --- | --- |
 | Three render states: collapsed → `null`, loading → skeleton, errored → `null` | Confirmed at `OrderSummary/index.tsx:134` and `:138-140`, the exact lines cited |
-| Issue 1: labels and column split hand-copied in the skeleton | Confirmed. `OrderSummarySkeleton/index.tsx:23-44` against `OrderAndBriefDetails/utils.tsx:86, 96-99, 103, 105, 115` — every cited line is accurate |
-| No test ties the two sets of labels together | Confirmed. The label test asserts four literals typed in the test file itself, and the loaded-state test mocks the real panel, so a rename in `getOrderDetailLists` would not fail anything |
+| Issue 1: labels and column split hand-copied in the skeleton | Confirmed. `OrderSummarySkeleton/index.tsx:23-44` against `OrderAndBriefDetails/utils.tsx:86, 96-99, 103, 105, 115` — every cited line was accurate. Now fixed, see Issues Found |
+| No test ties the two sets of labels together | Confirmed at the time: the label test asserted four literals typed in the test file itself, and the loaded-state test mocks the real panel, so a rename in `getOrderDetailLists` would not have failed anything |
 | Conditional rows left out of the skeleton, and marked `hidden` in the real panel | Confirmed for Created By, PO ID, Size and Files |
 | Skeleton is `aria-hidden`, nothing announces loading | Confirmed at line 60; no `aria-busy`, `aria-live` or visually-hidden text anywhere in these partials |
 | Hover prefetch still has no `staleTime` | Confirmed at `useOrderPrefetch.ts:16-19` |
@@ -30,7 +30,7 @@ The PR has not moved since this review: head is still `c044fb09c` (PR last updat
 Two things this review had left open are now settled:
 
 - **Validation ran clean.** The whole `@proofed/customer-portal` suite passes, along with typecheck, lint at `--max-warnings 0`, and a production build. Numbers in Validation Checks below. The original review had recorded these as skipped and unverified.
-- **Base drift.** The branch is 3 ahead and 23 behind `develop`, with no merge conflicts, and GitHub still reports the PR mergeable and clean. The build above ran on the PR head, not on a merge with current `develop`, so a green CI run on the current base is still worth having.
+- **Base drift.** The branch is 23 behind `develop`, with no merge conflicts, and GitHub reports the PR mergeable and clean. Validation ran on the PR head, not on a merge with current `develop`, so a green CI run on the current base is still worth having.
 
 Nothing in the original review needed correcting.
 
@@ -68,11 +68,11 @@ Lenses applied (small diff, 5 files): correctness, regressions/contract, reuse/d
 
 ## Issues Found
 
-### 1. Skeleton field labels are a second copy of the real panel's labels (DRY)
+### 1. Skeleton field labels were a second copy of the real panel's labels (DRY) — ✅ Fixed at `be7130653`
 
 **[File: apps/customer-portal/components/molecules/tables/OrderTable/partials/OrderSummarySkeleton/index.tsx]**
 
-> **In plain terms:** Nothing is wrong today. But if someone later renames a field in the order panel (say "Industry" becomes "Subject"), the loading placeholder will keep the old name and the label will visibly change when the data arrives.
+> **In plain terms:** Nothing was wrong for users. But if someone later renamed a field in the order panel (say "Industry" became "Subject"), the loading placeholder would have kept the old name and the label would have visibly changed when the data arrived.
 
 **Function/Class:** `FIELD_SKELETONS`, `ORDER_FIELD_COLUMNS`
 
@@ -80,33 +80,31 @@ Lenses applied (small diff, 5 files): correctness, regressions/contract, reuse/d
 
 **Confidence:** high
 
-**How to spot it:** code health only; there is no user-reproducible path today. Compare `OrderSummarySkeleton/index.tsx:23-44` with `OrderAndBriefDetails/utils.tsx:84-135`.
+**Problem (as found):** the eight label strings and their left/right column grouping were typed out by hand in the skeleton, though they already existed in `getOrderDetailLists`. Nothing tied the two together, and no test compared them: the skeleton test asserted the hardcoded strings against themselves.
 
-**Problem:** The eight label strings and their left/right column grouping are typed out by hand in the skeleton. They already exist in `getOrderDetailLists`. Nothing ties the two together, and no test compares them. The skeleton test asserts the hardcoded strings against themselves.
+**Evidence (as found):** `OrderSummarySkeleton/index.tsx:24` and `:35-44` against the same literals in `OrderAndBriefDetails/utils.tsx:86, 96-99, 103, 105, 115`.
 
-**Evidence:** `OrderSummarySkeleton/index.tsx:24` `"Submitted:": <SkeletonBox withLoading sx={{ width: "11rem" }} />,` … `:35-44` `const ORDER_FIELD_COLUMNS = [["Submitted:", "Project:", "Platform:", "Industry:", "Content Type:"], ["Style Guide:", "Language:", "Total Price:"]];`. The same literals appear in `OrderAndBriefDetails/utils.tsx:86,96-99,103,105,115`.
+**Scope of the duplication:** a DRY finding on the **strings only**. The label text was one piece of knowledge written in two files, which is what drifts on a rename. The surrounding structure is not: the skeleton deliberately lists only the always-present rows, while `getOrderDetailLists` also builds the conditional ones and marks them `hidden`. Those are two separate decisions that happen to overlap.
 
-**Impact:** Label drift between the loading and loaded states after any future rename. A reviewer has to remember to update two files.
-
-**Scope of the duplication (added 23 September):** this is a DRY finding on the **strings only**. The label text is one piece of knowledge written in two files, which is what drifts on a rename. The surrounding structure is not: the skeleton deliberately lists only the always-present rows, while `getOrderDetailLists` also builds the conditional ones and marks them `hidden`. Those are two different decisions that happen to overlap, so no shared constant removes the need to keep them in step by hand.
-
-**Fix:** Move the labels into an `OrderAndBriefDetails/consts.ts` (e.g. `ORDER_FIELD_LABELS`), then use them from both `getOrderDetailLists` and the skeleton:
+**Resolution:** a new `OrderAndBriefDetails/consts.ts` exports `ORDER_FIELD_LABELS`, covering all twelve labels including the conditional rows. `getOrderDetailLists` and `OrderSummarySkeleton` both read from it, so a rename moves the loading and loaded states together. The structure was left alone, as above. Verified after the change: 284 tests pass across 22 files for `OrderTable orders`, typecheck and lint clean.
 
 ```typescript
 // OrderAndBriefDetails/consts.ts
 export const ORDER_FIELD_LABELS = {
-  submitted: "Submitted:",
-  project: "Project:",
-  platform: "Platform:",
-  industry: "Industry:",
   contentType: "Content Type:",
-  styleGuide: "Style Guide:",
+  createdBy: "Created By:",
+  files: "Files:",
+  industry: "Industry:",
   language: "Language:",
+  platform: "Platform:",
+  project: "Project:",
+  purchaseOrderId: "PO ID:",
+  size: "Size:",
+  styleGuide: "Style Guide:",
+  submitted: "Submitted:",
   totalPrice: "Total Price:"
 } as const;
 ```
-
-**Cheaper alternative:** a test that renders both states and asserts the skeleton's labels against the loaded panel's labels catches the same drift without either file importing the other, and it closes the test gap noted below. Either route works; neither is required to merge.
 
 ---
 
@@ -120,16 +118,14 @@ export const ORDER_FIELD_LABELS = {
 
 ## Validation Checks
 
-All run 23 September 2026 on head `c044fb09c`, scoped to `@proofed/customer-portal`.
+Run 23 September 2026, scoped to `@proofed/customer-portal`. The first three were re-run after the Issue 1 fix.
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| `turbo run test` | ✅ Passed | 47 files, 478 tests passed, 0 failures |
-| `turbo run typecheck` | ✅ Passed | `tsc --noEmit` clean |
-| `turbo run lint` | ✅ Passed | `eslint --max-warnings 0` clean |
-| `turbo run build` | ✅ Passed | Production build succeeded in 616s, no type or build warnings |
-
-The scoped run named in the PR description (`test OrderTable orders`, 284 passed across 22 files) also reproduces exactly.
+| `turbo run test` | ✅ Passed | 47 files, 478 tests passed at `c044fb09c`; 22 files, 284 passed for `OrderTable orders` after the fix |
+| `turbo run typecheck` | ✅ Passed | `tsc --noEmit` clean, before and after the fix |
+| `turbo run lint` | ✅ Passed | `eslint --max-warnings 0` clean, before and after the fix |
+| `turbo run build` | ✅ Passed | Production build succeeded in 616s at `c044fb09c`, no warnings |
 
 ---
 
@@ -137,7 +133,7 @@ The scoped run named in the PR description (`test OrderTable orders`, 284 passed
 
 - ✅ `OrderSummary/index.test.tsx` (new, 8 tests). It covers all three states, the skeleton → panel transition, the error state, collapsed-with-cached-data, always-present labels, left-out conditional rows, and the section headings.
 - ✅ `useDeepLinkMonth.test.ts`: 11 tests, two of them new for the repeat deep link (re-sync, and `isResolved` false while pending). According to the PR, both fail on `develop`.
-- ⚠️ The label assertions only check the skeleton's own hardcoded strings, so they would not catch the drift in Issue 1.
+- ✅ Issue 1's drift risk is now structural rather than test-enforced: both states read the same constants, so the labels cannot diverge.
 - ⚠️ No test for the collapse → re-expand cycle on an already-loaded row (panel back instantly, no skeleton flash). This is low risk: the component stays mounted and the query stays cached.
 
 ### Suggested manual QA script
@@ -160,7 +156,7 @@ The scoped run named in the PR description (`test OrderTable orders`, 284 passed
 | Accessibility | ⚠️ (no loading announcement; pre-existing, see Open Questions) |
 | Error handling | ✅ (error state handled; UX question open) |
 | Security | ✅ (no new inputs, requests or data exposure) |
-| Code quality | ✅ (one low DRY finding on the field labels) |
+| Code quality | ✅ (the one DRY finding is fixed) |
 | Validation suite | ✅ Test, typecheck, lint and build all pass |
 | Mergeable state | ✅ Clean (GitHub `CLEAN`, 23 behind `develop`, no conflicts) |
 
@@ -170,7 +166,7 @@ The scoped run named in the PR description (`test OrderTable orders`, 284 passed
 
 **Approve**
 
-1. Optional: close the label duplication (Issue 1), either by sharing the labels or by adding a test that compares the two states.
+1. ~~Close the label duplication (Issue 1).~~ Done at `be7130653`.
 2. Get a product answer on the failed-load panel and the screen-reader announcement (Open Questions).
 3. Raise follow-up tickets for the fetch-chain parallelisation and the hover-prefetch `staleTime`, if they don't already exist.
-4. Validation passes on the PR head. Confirm CI is green on the current `develop` base before merging, since the branch is 23 commits behind.
+4. Validation passes on the branch. Confirm CI is green on the current `develop` base before merging, since the branch is 23 commits behind.
