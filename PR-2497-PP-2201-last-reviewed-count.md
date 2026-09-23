@@ -129,6 +129,8 @@ return { userFeedbacks, feedbackItems, isLoadingUserFeedbacks: isLoading, isUser
 
 Then set `jobCount` to `"-"` when the feedback failed with nothing cached, and add a test for it. The hook is shared, so this can be a small follow-up.
 
+**Resolution:** Skipped. The failure case already showed a false "Not yet reviewed" before this PR, so the wrong state is not new; only the count is. The fix needs a change to the shared `useUserFeedbacks` hook, which the team score cell (`TableWithFilters/partials/TeamScoreCellContent`) also uses, so it reaches beyond PP-2201's scope. A failed request still raises the global error toast, so the failure is visible. To be raised as a follow-up ticket.
+
 ### 2. Storybook "Default" description no longer matches the rendered count
 
 **[File: apps/creative-portal/components/molecules/UserPreview/index.stories.tsx]**
@@ -151,14 +153,33 @@ Then set `jobCount` to `"-"` when the feedback failed with nothing cached, and a
 
 **Fix:** give jobs 301 and 302 their own order IDs and keep 303 on `ORDER_ID`, which renders "3 jobs" (reviewed job 102 plus 301 and 302) and matches the existing description.
 
+**Resolution:** Skipped. Developer documentation only, with no effect on users or on QA of the ticket, and the story file is outside the files this ticket changes. Can be picked up with the next Storybook update.
+
 ---
 
 ## Open Questions
 
 - **Should "N jobs" and "days ago" refer to the same review?** The count starts from the highest reviewed job ID; the days figure is the age of the newest review written, which is what case 6 in the ticket asks for. They differ only when an older job is reviewed after a newer one (the test "dates the count from the newest reviewed job, not the newest feedback" builds this case). Not a defect against the ticket; a question for Adam. `utils.ts:9`
+  - **Resolution:** Skipped. Case 6 in the ticket defines "days ago" as the time since the last completed review, and the code follows it. Reviews written out of job order are rare.
 - Can the hover be opened on an order that is neither Live nor Complete (canceled, on hold)? If so, when the editor's job on that order is also their last reviewed job, the job search cannot return it and the hover would show "1 job" instead of "0 jobs". Fixing it would need the order's own job list. `utils.ts:43`
+  - **Resolution:** Skipped. The orders table's status filter can show canceled orders, so the case may be reachable, but it needs the viewed order's job to also be the editor's last reviewed job, which is rare. The result is off by one (1 instead of 0), and a fix would need the order's own job list as an extra data source.
 - A workflow can give the same editor two jobs of one type on one order. All of them are left out as "current". Is that the intended reading of "the current job"? `utils.ts:34`
+  - **Resolution:** Skipped. All of the editor's work on the order being viewed is current work, so leaving it all out matches "leave out the current job". No change unless Adam says otherwise.
 - For Review (QA) jobs, is `JobAssessment.jobId` the editor's own review job ID (comparable with the search results)? The BFF passes it through, so this depends on the OMS contract.
+  - **Resolution:** Skipped. The feedback dots already rely on the same `jobId` and job type filter, so the count adds no new assumption. To be confirmed during QA on a reviewer with QA feedback.
+
+---
+
+## Resolution Summary
+
+| # | Point | Severity | Resolution | Reason |
+|---|---|---|---|---|
+| Issue 1 | Failed review-history request shows a "never reviewed" count | Medium | Skipped | Pre-existing false state; fix needs the shared `useUserFeedbacks` hook (also used by the team score cell); follow-up ticket |
+| Issue 2 | Storybook description out of date | Low | Skipped | Developer docs only; outside the ticket's files |
+| Q1 | "N jobs" and "days ago" from different reviews | Question | Skipped | Days follow ticket case 6; rare |
+| Q2 | Viewed order neither Live nor Complete | Question | Skipped | Rare; off by one at most; fix needs extra data |
+| Q3 | Several jobs on the viewed order | Question | Skipped | All work on the viewed order is current work |
+| Q4 | `JobAssessment.jobId` for QA jobs | Question | Skipped | Same assumption as the feedback dots; confirm in QA |
 
 ---
 
@@ -219,7 +240,8 @@ Test against Adam's rule (comment 76584 + Slack), not the current description. O
 Before merge:
 
 1. **Adam updates the Jira description** to the Slack rule, or confirms it on Jira: count back to and including the reviewed job, leave out the current job; canceled orders count only where feedback was provided; never-reviewed "(X jobs)" leaves out the current job. This is the main blocker for QA.
-2. Fix the Storybook seed data (Issue 2); a two-line change.
-3. Decide on Issue 1: fix in this PR or a follow-up.
-4. Add a reviewer (none assigned yet) and re-run the build on edae837c7.
-5. Adam decides the never-reviewed design (Figma red "Never reviewed" or the ticket text).
+2. Add a reviewer (none assigned yet) and re-run the build on edae837c7.
+3. Adam decides the never-reviewed design (Figma red "Never reviewed" or the ticket text).
+
+All review points are skipped with reasons (see Resolution Summary). Raise a
+follow-up ticket for Issue 1.
