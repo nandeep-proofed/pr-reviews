@@ -2,7 +2,44 @@
 
 **PR:** https://github.com/Proofed/B2BWebserver/pull/2486
 **Jira:** https://proofed.atlassian.net/browse/PP-2156
-**Status:** Jira could not be fetched — the Atlassian MCP connection needs re-auth. The requirements table below is built from the requirements as restated in the PR description, not from the ticket itself. Re-check it against PP-2156 before merging.
+**Status:** Reviewed at `187d1a230`. Updated 23 Sep 2026: every finding was re-verified against that head, the Jira ticket has since been read (the requirements table below matches it), and Issues 1 to 4 are fixed in `a4034ea91`. See the update immediately below.
+
+
+---
+
+## Update, 23 September 2026
+
+### Fixes applied in `a4034ea91` (pushed to the PR branch)
+
+- **Issue 1, resolved.** `findActiveOrganisationGroup` now also requires `organisationGroup.organizationId === organizationId`, so the cross-organization guarantee no longer rests on the OMS search being scoped correctly, and both new schema fields are `Yup.number().integer().positive().optional()`, so the `0` that dropped the scoping headers is rejected before the lookup. Covered by a new helper test (the list returns the id under a different organization) and two new schema tests. Mutation-checked: removing the new predicate line fails exactly the new ownership test.
+- **Issue 2, resolved.** The route test is renamed to "skips the project lookup on a job-linked adjustment", with a comment recording that the schema rule it was named for does not run in that file.
+- **Issue 3, resolved.** Added "returns the project when the active flag is absent", which pins the deliberate `active !== false` spelling.
+- **Issue 4, resolved.** `organizationId` added to the child logger, and the success `.info` no longer repeats the fields `.with()` already carries.
+- **Issues 5 and 6, left open deliberately.** Both touch the non-`.nullable()` plus `== null` pattern and the test-helper options that the standalone charge twin shares, so they belong in their own change rather than inside this PR.
+
+### Checks run on the fix
+
+| Check | Result |
+| --- | --- |
+| Tests, `api/compensations` + `api/utils/organisationGroups` | 68 passed (was 62) |
+| `tsc --noEmit`, creative portal | clean |
+| ESLint on the changed folders | 0 errors, 0 warnings |
+| `next build` | not run, skipped by request |
+
+### OMS persistence is formally deferred, not outstanding
+
+The ticket settled this after the review was written:
+
+- Hideshi (22 Sep): "As agreed, please create a change request. This will be scoped for Rev 4.03."
+- Adam to QA (23 Sep): pass this through test "without the pay record being added against the Org Group", with a retest ticket once the API supports it.
+
+So ticket requirement 1.2 and testing-note cases 1 and 3 are waived for this pass and are not a merge blocker. Note that this makes Issue 1 more important rather than less: Rev 4.03 is exactly when a wrong-client project would start being stored.
+
+### Corrections to the review above
+
+- **Jira was unreachable when the review ran and has since been read.** The requirements table, rebuilt from the PR description, matches the ticket. One nuance: the ticket asks only for validation against "an active, existing organization group", so the wrong-organization rejection behind Issue 1 comes from the PR description and the helper's docblock. It was a code-versus-documentation gap, not a missed requirement.
+- `mergeable_state` now reports `clean`, not `unknown`.
+- Still outstanding before merge: the validation suite (including the build) and `/security`.
 
 ---
 
@@ -51,7 +88,7 @@ One asymmetry the PR creates, worth a deliberate decision rather than a silent d
 
 ## Issues Found
 
-### 1. The cross-organization check has no local guard, and `organizationId: 0` removes the remote one
+### 1. The cross-organization check has no local guard, and `organizationId: 0` removes the remote one (fixed in `a4034ea91`)
 
 **[File: apps/creative-portal/api/utils/organisationGroups/findActiveOrganisationGroup.ts:43]**
 
@@ -122,7 +159,7 @@ organizationGroupId: Yup.number().integer().positive().optional(),
 
 Add a `findActiveOrganisationGroup` test where the returned list contains the id under a *different* `organizationId`, asserting `undefined`.
 
-### 2. A test named for job-linked behaviour cannot observe it
+### 2. A test named for job-linked behaviour cannot observe it (fixed in `a4034ea91`)
 
 **[File: apps/creative-portal/api/compensations/createCompensation.test.ts:137]**
 
@@ -142,7 +179,7 @@ Add a `findActiveOrganisationGroup` test where the returned list contains the id
 
 **Fix:** Delete it, or rename it to what it can prove (e.g. "skips the project lookup when no project is supplied, even with a jobId").
 
-### 3. The `active !== false` branch is unpinned — a future "tightening" would break live projects silently
+### 3. The `active !== false` branch is unpinned — a future "tightening" would break live projects silently (fixed in `a4034ea91`)
 
 **[File: apps/creative-portal/api/utils/organisationGroups/findActiveOrganisationGroup.ts:46]**
 
@@ -172,7 +209,7 @@ it("accepts a project whose active flag is absent", async () => {
 });
 ```
 
-### 4. The rejected project pair cannot be reconstructed from the logs
+### 4. The rejected project pair cannot be reconstructed from the logs (fixed in `a4034ea91`)
 
 **[File: apps/creative-portal/api/compensations/createCompensation.ts:28]**
 
@@ -329,6 +366,8 @@ Cases 1-8 correspond to the author's own manual test table; 9 and 10 are the add
 ---
 
 ## Recommendation
+
+> Updated 23 Sep 2026: step 1 is done, and Issues 2 to 4 of step 5 with it (see the update at the top). Steps 2 and 3 still stand. Step 4's OMS persistence question has been answered: the client deferred it to OMS Rev 4.03.
 
 **Approve with suggestions** — contingent on the validation suite passing, which this review did not run.
 
