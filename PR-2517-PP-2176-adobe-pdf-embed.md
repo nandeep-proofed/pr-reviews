@@ -499,7 +499,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 - `config/pdfSubmission.ts:6-7`: "those live in the draft record".
 - `usePdfJobSeedVersion.ts:64-66`: see Issue 9.
 - `Submission/index.tsx:104` and `PdfViewerModal/hooks.ts:112`: cite "requirement 5" for zero-mark submit. That was client Q3, not requirement 5.
-- `docs/PP-2176-adobe-pdf-embed.md:204-226`: present-tense reconcile text under "read this first".
+- `docs/PP-2176-pdf-in-browser-markup.md:204-226`: present-tense reconcile text under "read this first".
 
 **Impact:** Maintainers are misled about where roles live and what protects the customer copy.
 
