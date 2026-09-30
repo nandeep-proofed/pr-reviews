@@ -6,13 +6,59 @@
 
 ---
 
+## Update — all findings resolved (30 Sep 2026)
+
+After this review every finding was fixed on the branch, tested and pushed. Each fix below was cross-checked against the code afterwards: the change is present and matches this description, and every commit cited contains it.
+
+| Item | Status | Commit(s) |
+| --- | --- | --- |
+| Merge conflict with `develop` (`enums.ts`) | ✅ Kept `PdfAnnotations`, `EditedCopyInternal` and develop's `ReviewJobDelta` | `09a9104c9` |
+| Issue 1: customer comments relabelled "Proofed" | ✅ Fixed | `72b7bd95d` |
+| Issue 2: encrypted PDFs delivered unreadable | ✅ Fixed | `72b7bd95d` |
+| Issue 3: stale/unmarked PDF after leaving or switching jobs | ✅ Fixed | `d14dc6755` |
+| Issue 4: submit sent the copy from before the save | ✅ Fixed | `d14dc6755` |
+| Issue 5: refused PDFs, generic error, unguarded read | ✅ Fixed | `72b7bd95d`, `9d7e843dd` |
+| Issue 6: viewer's file kept after switching to upload | ✅ Fixed | `15f5254ed` |
+| Issue 7: endless loader when Adobe's script is blocked | ✅ Fixed | `15f5254ed` |
+| Issue 8: tab close/hide lost marks, duplicate saves | ✅ Fixed | `15f5254ed` |
+| Issue 9: desktop names in the internal copy | ✅ Fixed (product decision: label by the job's role) | `9d7e843dd` |
+| Issue 10: brief missing support documents | ✅ Fixed | `a16dbd118` |
+| Issue 11: overlapping saves | ✅ Fixed | `15f5254ed` |
+| Issue 12: Brief button inside a button | ✅ Fixed | `a16dbd118` |
+| Issue 13: stale comments | ✅ Fixed, plus five comments the Issue 1 fix made stale | `72b7bd95d`, `d14dc6755`, `21246d837`, `15f5254ed` |
+| Issue 14: convention items | ✅ Fixed | `9949ed00a` (and `a16dbd118` for `VoidFunction`, `15f5254ed` for `PdfSubmissionFileSync/hooks.ts`) |
+| Issue 15: dead code | ✅ Fixed | `21246d837`, `d14dc6755`, `9949ed00a` |
+| Issue 16: duplicated logic | ✅ Fixed within this PR's code (see note under Issue 16) | `72b7bd95d`, `9949ed00a` |
+| `develop`'s PP-2052 review-delta order test, broken by PDF steps | ✅ Fixed | `893a0210d` |
+
+**How each was fixed**
+
+- **Issue 1.** A mark keeps its author when that author is named on the order's `Original` version. `readOriginalPdfAuthors` reads it with pdfjs, is cached per order after a successful read, and is only called when the file names someone other than "Proofed" or a role. Our role labels are always rewritten. If the original can't be read, every mark falls back to "Proofed", so no internal name reaches the customer. The shared rule is `pickKeptPdfAuthors`.
+- **Issue 2.** `normaliseAnnotationAuthors` throws `EncryptedPdfError` instead of re-saving; the strip then checks the file with pdfjs and either passes it untouched or blocks it. `ensureAnnotationDates` and `applyRotationMap` serve encrypted files untouched. A file with nothing to change is never re-serialised.
+- **Issue 3.** The viewer tracks whether it is still mounted and drops late loads, late saves and late failures. `PdfContentPill` is keyed by job and `PdfViewerModal` by seed version.
+- **Issue 4.** `prepareForSubmit` resolves with the latest file the viewer holds, and `onSubmit` sends that instead of Formik's pre-wait snapshot.
+- **Issue 5.** A PDF that can't be made safe is refused with a 422 whose message the job panel shows (`getJobActionErrorMessage`), reported once rather than twice. A file neither parser can read is let through and reported, as before PP-2176.
+- **Issue 6.** Switching to download-and-upload clears the viewer's file, and `PdfSubmissionFileSync` removes it from the form.
+- **Issue 7.** `useAdobeEmbedSdk` exposes `hasFailed`; the job then offers only download-and-upload (`SdkLoadFailed`), and the failure is reported once.
+- **Issue 8.** Hiding the tab reads the marks fresh and sends them by beacon; closing it sends the last good read. The same record is never sent twice, and a failed empty read is never beaconed.
+- **Issue 9.** In the internal copy, a desktop tool's names become the submitting job's role ("Editor", "Reviewer", "QA"); customer names and the AI's "Proofed" are kept. A file that can't be relabelled is stored as it arrived.
+- **Issue 10.** The pill reads the same support-documents query as the job panel (a cache hit) and passes it into the brief.
+- **Issue 11.** Saves run one at a time; unsaved state is a change counter, so a mark made mid-save stays unsaved until written.
+- **Issue 12.** The Brief icon is a labelled span inside the popover's single control.
+
+**New or strengthened tests.** `normaliseAnnotationAuthors`, `ensureAnnotationDates`, `applyRotationMap`, `collectAnnotations`, `utils` (angles), `stripPdfInternalAuthors`, `readOriginalPdfAuthors` / `pickKeptPdfAuthors`, `storePdfInternalCopy`, `PdfViewerModal/hooks`, `PdfViewerTopBar`, `Submission/hooks`, `PdfSubmissionFileSync/hooks`, `usePdfSubmissionMode`, `useAdobeEmbedSdk`, `usePdfAnnotationDrafts` (beacon, serialised saves), `ServiceSubmission/hooks`, `PdfContentPill/hooks` (support documents), `RawButton`, and `patchJob` (PDF internal copy before the delta).
+
+**Not yet verified in the browser:** an original with a customer comment; a permission-protected original; leaving the viewer mid-load on a large file; blocking Adobe's script; closing the tab straight after a mark; a download-and-upload PDF opened by the reviewer.
+
+---
+
 ## What this means for users (non-technical summary)
 
-1. **Customers' own comments come back renamed.** If a customer sends a PDF that already has their own comments, every one of those comments says "Proofed" after we submit. The ticket says original comments must keep their author.
-2. **Protected PDFs can become unreadable.** If a customer sends a password-protected or permission-restricted PDF, the file we deliver can fail to open.
-3. **A job can pick up another job's document.** An editor who switches between two PDF jobs quickly, or leaves the viewer while it is still loading, can have the wrong or unmarked PDF placed ready to submit.
-4. **Very late marks can be missed at submit.** An editor who clicks Submit a moment after their last mark, before Adobe has finished saving, sends the previous copy. The job still reports success.
-5. **Some uploads that used to work are now refused.** When a PDF our tools can't fully read also has comments in it, the submission is blocked. The editor gets a generic error instead of the intended explanation.
+1. ✅ *Fixed.* **Customers' own comments come back renamed.** If a customer sends a PDF that already has their own comments, every one of those comments says "Proofed" after we submit. The ticket says original comments must keep their author.
+2. ✅ *Fixed.* **Protected PDFs can become unreadable.** If a customer sends a password-protected or permission-restricted PDF, the file we deliver can fail to open.
+3. ✅ *Fixed.* **A job can pick up another job's document.** An editor who switches between two PDF jobs quickly, or leaves the viewer while it is still loading, can have the wrong or unmarked PDF placed ready to submit.
+4. ✅ *Fixed.* **Very late marks can be missed at submit.** An editor who clicks Submit a moment after their last mark, before Adobe has finished saving, sends the previous copy. The job still reports success.
+5. ✅ *Fixed.* **Some uploads that used to work are now refused.** When a PDF our tools can't fully read also has comments in it, the submission is blocked. The editor gets a generic error instead of the intended explanation.
 
 ---
 
@@ -24,12 +70,12 @@
 | 2.1–2.2 "Trouble with the editor?" / "Prefer to edit in your browser?" links | `PdfSubmissionModeLink`, placed in both modes | ✅ Addressed |
 | 3.1 Embed only for PDFs under 50 MB | `PDF_EMBED_SIZE_CEILING_BYTES` in the panel, and again in the PDF route (413) | ✅ Addressed |
 | 4.1–4.4 Annotation tools and APIs on, existing marks visible, Download on, fit-width | `AUTHORING_PREVIEW_OPTIONS` | ✅ Addressed |
-| 5.1.1 Pre-existing annotations keep their metadata | `normaliseAnnotationAuthors` rewrites **every** author to "Proofed", the customer's own included (Issue 1) | ❌ Missing |
+| 5.1.1 Pre-existing annotations keep their metadata | Authors named on the order's `Original` are kept; everything else becomes "Proofed" (fixed in `72b7bd95d`, was Issue 1) | ✅ Addressed |
 | 5.1.2 New annotations labelled "Proofed" | The customer copy is stripped to "Proofed" on submit | ✅ Addressed |
 | 5.1.3 Customer annotations stored at each job submission | `EditedCopy` on every submit | ✅ Addressed |
 | 5.2 Internal labels per job (AI / Editor / Reviewer / QA / Admin), shown to internal users | Roles for people via `EditedCopyInternal` + Adobe author. AI labels deferred by Adam (comment 76970) | ⚠️ Partial (agreed deferral) |
 | 6.1 Each submission stores the whole PDF with customer annotations | `EditedCopy` | ✅ Addressed |
-| 6.2 Annotations saved after each change | `PdfAnnotations` drafts (20 s debounce, collapse, submit). The tab-close path is weak (Issue 8) | ⚠️ Partial |
+| 6.2 Annotations saved after each change | `PdfAnnotations` drafts (20 s debounce, collapse, submit, tab hide/close; fixed Issue 8) | ✅ Addressed |
 | 7 Pages in correct orientation, detected once | `rotationDetect` + `applyRotationMap`, cached per version, stored file never changed | ✅ Addressed |
 | 8 Editor job history unchanged | `workItemContentVersionRules` excludes drafts and internal copies from every list (callers checked) | ✅ Addressed |
 | 9 Admin view unchanged | Admin submit modal keeps the upload. Viewer there deferred by Adam (76970) | ✅ Addressed |
@@ -49,21 +95,21 @@ Marks are authored with the user's role through Adobe's profile callback. They a
 
 On submit, the server stores two versions:
 - `EditedCopyInternal`, with roles kept, which the next internal job opens;
-- `EditedCopy`, with every author rewritten to "Proofed" and the identifier restamped, which the customer receives.
+- `EditedCopy`, where every mark Proofed made says "Proofed" (the customer's own comments keep their author) and the identifier is restamped, which the customer receives.
 
 The next job's viewer opens the previous internal copy unless another job (e.g. an AI job) produced a version after it.
 
-Overall the design is coherent. It reuses shared primitives well (`FullscreenModal`, `Brief`, `PopoverOnClick`, `useScript`, `reportError`) and keeps the new version types out of every existing list. The weak spots are:
-- the author rewrite is too broad (Issue 1);
-- no encryption guard (Issue 2);
+Overall the design is coherent. It reuses shared primitives well (`FullscreenModal`, `Brief`, `PopoverOnClick`, `useScript`, `reportError`) and keeps the new version types out of every existing list. The weak spots found by this review, all since fixed:
+- the author rewrite was too broad (Issue 1);
+- there was no encryption guard (Issue 2);
 - component lifetime across job switches and unmounts (Issue 3);
-- the submit reads a snapshot taken before its own wait (Issue 4).
+- the submit read a snapshot taken before its own wait (Issue 4).
 
 ---
 
 ## Issues Found
 
-### 1. The customer's own comments are relabelled "Proofed"
+### 1. The customer's own comments are relabelled "Proofed" — ✅ Fixed in `72b7bd95d`
 
 **[File: packages/shared/api/utils/pdf/normaliseAnnotationAuthors.ts]**
 
@@ -96,7 +142,7 @@ const originalNames = await readAnnotationNames(originalBytes); // page + /NM
 if (!originalNames.has(key(pageIndex, nm))) annotation.set(AUTHOR_KEY, author);
 ```
 
-### 2. Protected (encrypted) PDFs can be delivered unreadable
+### 2. Protected (encrypted) PDFs can be delivered unreadable — ✅ Fixed in `72b7bd95d`
 
 **[File: packages/shared/api/utils/pdf/normaliseAnnotationAuthors.ts]**
 
@@ -124,7 +170,7 @@ if (!originalNames.has(key(pageIndex, nm))) annotation.set(AUTHOR_KEY, author);
 
 **Fix:** When `document.isEncrypted`, don't save. Use the pdfjs author read instead: pass through if nothing needs stripping, otherwise block with the actionable message. Also skip `save()` when no author changed. `ensureAnnotationDates` and `applyRotationMap` load the same way; the served bytes can become the submission, so apply the same guard there.
 
-### 3. The wrong or unmarked PDF can be placed ready to submit after leaving or switching jobs
+### 3. The wrong or unmarked PDF can be placed ready to submit after leaving or switching jobs — ✅ Fixed in `d14dc6755`
 
 **[File: apps/creative-portal/components/organisms/modals/PdfViewerModal/hooks.ts]**
 
@@ -162,7 +208,7 @@ if (!originalNames.has(key(pageIndex, nm))) annotation.set(AUTHOR_KEY, author);
 <PdfViewerModal key={`${attribution.jobId}-${seedVersionId}`} ... />
 ```
 
-### 4. Submit can send the copy from before the save it waits for
+### 4. Submit can send the copy from before the save it waits for — ✅ Fixed in `d14dc6755`
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/JobManagement/partials/Submission/hooks.ts]**
 
@@ -195,7 +241,7 @@ const latest = await flushPdfDraft?.();
 const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 ```
 
-### 5. Unreadable PDFs with comments are now refused, with an unhelpful error
+### 5. Unreadable PDFs with comments are now refused, with an unhelpful error — ✅ Fixed in `72b7bd95d`, `9d7e843dd`
 
 **[File: apps/creative-portal/api/utils/jobs/stripPdfInternalAuthors.ts]**
 
@@ -232,7 +278,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 - Surface the server message in the sidebar's `onError`.
 - Wrap `readAnnotationAuthors` in try/catch.
 
-### 6. Switching to download-and-upload keeps the viewer's file attached
+### 6. Switching to download-and-upload keeps the viewer's file attached — ✅ Fixed in `15f5254ed`
 
 **[File: apps/creative-portal/hooks/usePdfSubmissionMode.ts]**
 
@@ -262,7 +308,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Clear `submissionFile` when the mode becomes Fallback. In `PdfSubmissionFileSync`, reset `editedCopy` to the uploaded file (or `undefined`) when `submissionFile` becomes undefined.
 
-### 7. If Adobe's script is blocked, the editor spins forever
+### 7. If Adobe's script is blocked, the editor spins forever — ✅ Fixed in `15f5254ed`
 
 **[File: apps/creative-portal/hooks/useAdobeEmbedSdk.ts]**
 
@@ -292,7 +338,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Expose `isFailed: status === "error"` (plus a ready timeout). Treat it as a new unavailable reason, and `reportError` once.
 
-### 8. Closing or hiding the tab can lose recent marks and creates duplicate saves
+### 8. Closing or hiding the tab can lose recent marks and creates duplicate saves — ✅ Fixed in `15f5254ed`
 
 **[File: apps/creative-portal/hooks/usePdfAnnotationDrafts.ts]**
 
@@ -323,7 +369,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 - Clear the dirty flag, or skip identical payloads, after a beacon.
 - Write `latestAnnotationsRef` only after the empty-list guard passes.
 
-### 9. Download-and-upload submissions also store an internal copy, and the comments say they don't
+### 9. Download-and-upload submissions also store an internal copy, and the comments say they don't — ✅ Fixed in `9d7e843dd`
 
 **[File: apps/creative-portal/api/utils/jobs/postAddWorkItemContentVersion.ts]**
 
@@ -353,7 +399,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Store the internal copy only for embed submissions (send a mode flag), or strip non-role authors from it. Also correct the comment and the doc. Confirm the intended behaviour with product.
 
-### 10. The Brief popover's full-screen brief omits support documents
+### 10. The Brief popover's full-screen brief omits support documents — ✅ Fixed in `a16dbd118`
 
 **[File: apps/creative-portal/components/organisms/sidebars/contents/PdfContentPill/hooks.ts]**
 
@@ -380,7 +426,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Extract a shared `buildBriefProps(order)` and use it in all three places.
 
-### 11. Overlapping saves can restore an older snapshot
+### 11. Overlapping saves can restore an older snapshot — ✅ Fixed in `15f5254ed`
 
 **[File: apps/creative-portal/hooks/usePdfAnnotationDrafts.ts]**
 
@@ -402,7 +448,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Chain saves through a promise ref, or choose the draft by `savedAt`.
 
-### 12. The Brief icon is a button inside a button
+### 12. The Brief icon is a button inside a button — ✅ Fixed in `a16dbd118`
 
 **[File: apps/creative-portal/components/organisms/modals/PdfViewerModal/partials/PdfViewerTopBar/index.tsx]**
 
@@ -424,7 +470,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Render the icon as a non-interactive element inside `PopoverOnClick`, or add a controlled-trigger option to it.
 
-### 13. Comments that describe removed behaviour (stale/contradictory)
+### 13. Comments that describe removed behaviour (stale/contradictory) — ✅ Fixed in `72b7bd95d`, `d14dc6755`, `21246d837`, `15f5254ed`
 
 **[File: several; see list]**
 
@@ -459,7 +505,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Delete the orphan block and rewrite each comment to the current design. In the doc, mark the reconcile section as historical.
 
-### 14. Mandatory convention violations (CLAUDE.md Code Style)
+### 14. Mandatory convention violations (CLAUDE.md Code Style) — ✅ Fixed in `9949ed00a`
 
 **[File: several; see list]**
 
@@ -492,7 +538,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Apply each rule as listed. Most are one-line changes.
 
-### 15. Dead code
+### 15. Dead code — ✅ Fixed in `21246d837`, `d14dc6755`, `9949ed00a`
 
 **[File: several; see list]**
 
@@ -517,7 +563,7 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Delete the unused code, and use `pickSeedContentVersion` in `usePdfJobSeedVersion`.
 
-### 16. Duplicated logic that should be shared
+### 16. Duplicated logic that should be shared — ✅ Fixed in `72b7bd95d`, `9949ed00a`
 
 **[File: several; see list]**
 
@@ -544,51 +590,60 @@ const files = prepareFiles({ ...data, editedCopy: latest ?? data.editedCopy });
 
 **Fix:** Add `forEachAnnotation(document, fn)` / `loadPdf(bytes)` and `withPdfjsPages(bytes, fn)` helpers in `packages/shared/api/utils/pdf/`, and a `getRoleLabel(role)` helper. Reuse the shared date and base64 helpers.
 
+
+**Resolution note.** Shared now: one annotation walker (`collectAnnotations`), one pdfjs page loop (`forEachPdfjsPage`), `normaliseDegrees`, `getRoleLabel`, the shared `parseUtcDateString` and `convertToArrayBuffer`, and `RawButton`'s new `isUnderlined` option in place of a fourth underlined-button copy. The customer-facing name lives in a pdf-lib-free `consts.ts`. Three older underlined-button copies (`FileSubmission`, `AddOrdersStep`, onboarding step 5) predate this PR and were left alone. `storePdfInternalCopy` now base64-encodes rewritten bytes, so `fileToBase64` (which takes a file) no longer applies.
 ---
 
 ## Open Questions
 
-- After a crash-restore, the viewer marks the document "unsaved" (the restore raises annotation events). If Adobe does not save programmatically added marks via focus polling, can an editor who restores and makes no new mark still submit? Please test: restore → no mark → Submit. — `PdfViewerModal/hooks.ts:196-199`
-- The streaming submit branch (admin order-jobs modal) doesn't call `restampPdfIdentifier`. pdf-lib keeps the Info `/UUID`, so it appears harmless. Add it anyway for symmetry? — `postAddWorkItemContentVersion.ts:141-153`
-- The client create route now accepts `versionType: "EditedCopyInternal"` (the enum grew). Since `EditedCopy` was already postable, should this route be restricted to `PdfAnnotations`? — `createWorkItemContentVersion/schema.ts:9-11`
-- Customer portal by-id handler: does the OMS client API refuse `EditedCopyInternal` / `PdfAnnotations` versions to customers? If not, a 404 guard using `isInternalContentVersion` would enforce "never accessible to the customer" (Adam 76831). This was flagged below the confidence bar by the security review. — `packages/shared/api/workItemContentVersion/[id]/getWorkItemContentVersion`
-- The full-screen viewer has no dialog role, focus trap or Escape handling, and focus isn't returned to the pill on collapse. `FullscreenModal` and the WYSIWYG modal have the same gap already. Fix in `FullscreenModal` as a follow-up? — `FullscreenModal/index.tsx:44-122`
-- `usePdfSubmissionMode` returns a new object each render, which defeats downstream memos. It is cheap today; wrap it in `useMemo`? — `usePdfSubmissionMode.ts:109-121`
-- Stale-draft detection matches the OMS error text "not associated with this job". Is that message contractually stable? — `usePdfAnnotationDrafts.ts:207`
+These were not defects, and remain open for the author or product to decide:
+
+- After a crash-restore, the viewer counts the restored marks as unsaved (the restore raises annotation events), so submit waits for Adobe to save. If Adobe does not save programmatically added marks via focus polling, an editor who restores and makes no new mark would be refused. Please test: restore, no new mark, Submit. — `PdfViewerModal/hooks.ts` annotation listener
+- The streaming submit branch (admin order-jobs modal) doesn't call `restampPdfIdentifier`. pdf-lib keeps the Info `/UUID`, so it appears harmless. Add it for symmetry? — `postAddWorkItemContentVersion.ts` streaming branch
+- The client create route accepts every `versionType` in the enum, now including `EditedCopyInternal` and develop's `ReviewJobDelta`. `EditedCopy` was already postable, so this adds little, but should the route accept only `PdfAnnotations` from the browser? — `createWorkItemContentVersion/schema.ts`
+- Does the OMS client API refuse `EditedCopyInternal` / `PdfAnnotations` versions to customers? If not, a 404 guard using `isInternalContentVersion` in `packages/shared/api/workItemContentVersion/[id]/getWorkItemContentVersion/getWorkItemContentVersion.ts` would enforce "never accessible to the customer" (Adam 76831). Flagged below the confidence bar by the security review.
+- The full-screen viewer has no dialog role, focus trap or Escape handling, and focus isn't returned to the pill on collapse. `FullscreenModal` and the WYSIWYG modal share the gap. Fix in `FullscreenModal` as a follow-up? — `FullscreenModal/index.tsx`
+- `usePdfSubmissionMode` returns a new object each render, which defeats downstream memos. Nothing expensive re-runs today; wrap it in `useMemo`? — `usePdfSubmissionMode.ts`
+- Stale-draft detection matches the OMS error text "not associated with this job". Is that message contractually stable? — `usePdfAnnotationDrafts.ts`
 
 ---
 
 ## Validation Checks
 
+Run at `893a0210d`, after the develop merge and every fix.
+
 | Check | Result | Notes |
 | --- | --- | --- |
-| `npx turbo run test` | ⚠️ | shared 1997/1998. The one failure is `formatWordQuantity` (locale en-IN); unrelated, and it passes with en-US. customer-portal 500/500. creative-portal 372/375 files pass. `organisms/Header/index`, `Header/hooks` and `SideNav/index` hang, identically on `origin/develop` (verified in a worktree); this branch doesn't touch them |
+| `npx turbo run test` | ✅ | shared 2144/2144 (208 files, en-US locale; `formatWordQuantity` only fails under en-IN and is unrelated). customer-portal 548/548 (55 files). creative-portal 4082/4082 (392 files), excluding `organisms/Header/index`, `Header/hooks` and `SideNav/index`, which hang identically on `origin/develop` and are untouched by this PR |
 | `npx turbo run typecheck` | ✅ | 0 errors, all workspaces |
-| `npx turbo run lint` | ✅ | 0 errors, all workspaces |
+| `npx turbo run lint` | ✅ | 0 errors, all workspaces (12/12 tasks) |
 | `npx turbo run build` | ✅ | creative-portal and customer-portal compiled successfully |
 
-Validation was run unscoped for typecheck/lint (the PR touches `packages/shared`), with full test suites for shared, creative-portal and customer-portal, and builds for both portals.
+Typecheck and lint were unscoped because the PR touches `packages/shared` (including the shared `RawButton`).
 
 ---
 
 ## Tests
 
-- ✅ Unit tests added for all new utils, hooks, the PDF route and the submit helpers (rotation, author rewrite and read, date fill, rules, seed resolver, drafts, viewer hooks, env).
-- ✅ Edge cases covered: unparseable PDFs, AI-in-between seeding, Caret documents read by id, undated marks, oversize and unknown sizes, drafts refused as documents.
-- ❌ Missing: encrypted PDF through `normaliseAnnotationAuthors` (Issue 2); the original customer comments' authors being preserved (Issue 1); an unmount mid-load and a job switch (Issue 3); a late SAVE during submit (Issue 4); a mode switch clearing the file (Issue 6); an SDK load error (Issue 7).
-- ✅ Manual end-to-end checks on devtest orders 21658 (Service → Review) and 21654 (AI Pre-edit → Service → AI Post-edit → Review).
+- ✅ Unit tests for all new utils, hooks, the PDF route and the submit helpers.
+- ✅ Every fixed issue has a test: customer authors kept (1); encrypted files (2); late load after unmount (3); late save during submit (4); 422 message and unreadable file (5); mode switch clears the file (6); SDK load failure (7); fresh read on hide and no duplicate beacons (8); role labels in the internal copy (9); support documents in the brief (10); serialised saves (11); single Brief control (12).
+- ⚠️ Not covered by an automated test: the job-switch path of Issue 3 (keys on the pill and viewer), which needs a full panel render with cached queries.
+- ✅ Manual end-to-end checks on devtest orders 21658 (Service → Review) and 21654 (AI Pre-edit → Service → AI Post-edit → Review), before these fixes.
 
 ### Suggested manual QA script
 
-1. (Issue 1) Upload a PDF with an Acrobat comment by "Jane Smith", then submit as the editor. The delivered comment should still say "Jane Smith".
-2. (Issue 2) Use a permission-restricted PDF as the original, then submit. The delivered file must open.
-3. (Issue 3) Open the in-browser editor on a large PDF. While it loads, collapse and switch to download-and-upload. There should be no error toast and no file attached.
-4. (Issue 4) Mark, collapse and submit immediately. The delivered file should contain the last mark.
-5. (Issue 6) Open the in-browser editor, then switch to download-and-upload. The upload area should be empty.
-6. (Issue 7) Block `acrobatservices.adobe.com` and open the in-browser editor. Expect a message and a fallback, not an endless spinner.
-7. (Issue 8) On a fresh job, mark, then close the tab within 20 s and reopen. The mark should be restored.
-8. (Issue 10) Open Brief inside the editor on an order with support documents. They should be listed.
-9. (Open question 1) Restore after a crash, make no new mark, and Submit. It should submit without "not saved yet".
+1. (Issue 1) Use an original with an Acrobat comment by "Jane Smith"; submit as the editor. The delivered comment still says "Jane Smith"; the editor's marks say "Proofed".
+2. (Issue 2) Use a permission-restricted original; submit. The delivered file opens.
+3. (Issue 3) Open the in-browser editor on a large PDF; while it loads, collapse and switch to download-and-upload. No error toast, no file attached.
+4. (Issue 4) Mark, collapse and submit immediately. The delivered file contains the last mark.
+5. (Issue 5) Upload a PDF our tools can't rewrite that still names a role. The toast explains why it was refused.
+6. (Issue 6) Open the in-browser editor, then switch to download-and-upload. The upload area is empty.
+7. (Issue 7) Block `acrobatservices.adobe.com`; open a PDF job. Download-and-upload is offered, no endless loader.
+8. (Issue 8) On a fresh job, mark, then close the tab within 20 s and reopen. The mark is restored.
+9. (Issue 9) Upload a PDF marked in desktop Acrobat under your own name; open the review job. The marks say "Editor".
+10. (Issue 10) Open Brief inside the editor on an order with support documents. They are listed.
+11. (Issue 12) Tab through the viewer's top bar. Brief is one tab stop.
+12. (Open question 1) Restore after a crash, make no new mark, and Submit.
 
 ---
 
@@ -596,27 +651,20 @@ Validation was run unscoped for typecheck/lint (the PR touches `packages/shared`
 
 | Aspect | Status |
 | --- | --- |
-| Correctness | ❌ Issues 1–4 (customer-comment authors, encrypted PDFs, stale load / job switch, late save at submit) |
-| Regression risk | ⚠️ Medium: every PDF submission now passes through a pdf-lib rewrite (Issues 1, 2, 5) |
-| Tests | ⚠️ Good coverage of new logic, but the defect paths above are untested |
-| Accessibility | ⚠️ Nested interactive Brief control (Issue 12); dialog semantics gap is pre-existing |
-| Error handling | ⚠️ SDK load failure, blocked-submit messaging, unguarded pdfjs read |
+| Correctness | ✅ All reported defects fixed (Issues 1–12) |
+| Regression risk | ✅ Low: `develop`'s full suites pass; the one interaction found (PP-2052 delta order) was fixed and pinned by a test |
+| Tests | ✅ Every fix has a test; only the Issue 3 job-switch path lacks one |
+| Accessibility | ✅ Brief is one control. The dialog-semantics gap is pre-existing (open question) |
+| Error handling | ✅ SDK load failure, blocked-submit message and unreadable files all handled and reported once |
 | Security | ✅ `/security-review` found nothing above the confidence bar. One open question on customer-portal by-id access |
-| Code quality | ⚠️ Stale comments, convention drift, dead code, duplication (Issues 13–16) |
-| Validation suite | ✅ Typecheck, lint and build all pass. Tests pass apart from pre-existing, unrelated locale and hang issues |
-| Mergeable state | ❌ Dirty: conflict with `develop` in `packages/shared/api/workItemContentVersion/enums.ts` |
+| Code quality | ✅ Stale comments, conventions, dead code and duplication addressed |
+| Validation suite | ✅ Typecheck, lint, build and tests all pass (pre-existing hangs excluded, unrelated) |
+| Mergeable state | ✅ MERGEABLE / CLEAN at `893a0210d` (the PR head) |
 
 ---
 
 ## Recommendation
 
-**Request changes**
+**Approve** (was: Request changes, then Approve with suggestions).
 
-1. Limit the author rewrite to marks Proofed added, and keep the customer's original authors (Issue 1, requirement 5.1.1). Also re-scope the unparseable-file block to the same rule (Issue 5).
-2. Don't re-save encrypted PDFs (Issue 2). Add a test with a permission-encrypted fixture.
-3. Add cancellation to the viewer start effect, and key the viewer or `JobManagement` by job (Issue 3).
-4. Use the file returned by the pre-submit wait, not the Formik snapshot (Issue 4).
-5. Clear the viewer's file when switching to download-and-upload (Issue 6), and handle the SDK load error (Issue 7).
-6. Resolve the `enums.ts` merge conflict with `develop`.
-7. Should-fix before merge: the beacon (Issue 8); internal-copy scope and its comments (Issue 9); the Brief support documents (Issue 10); stale comments (Issue 13); convention violations (Issue 14).
-8. Can follow later: Issues 11, 12, 15 and 16, and the open questions.
+Every finding in this review is fixed, tested and pushed, and the full validation suite passes. Before merge, run the manual QA script above on devtest, particularly items 1–3, 7, 8 and 9, which change behaviour the browser has not yet exercised. The open questions are follow-ups, not blockers.
