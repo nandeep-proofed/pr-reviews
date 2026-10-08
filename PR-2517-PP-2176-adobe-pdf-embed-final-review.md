@@ -4,7 +4,7 @@
 **Jira:** [https://proofed.atlassian.net/browse/PP-2176](https://proofed.atlassian.net/browse/PP-2176)
 **Status:** Follow-up fixes done in [PP-2223](https://proofed.atlassian.net/browse/PP-2223) on `feature/PP-2223-pdf-markup-follow-up` (8 Oct 2026). Issue 5 waits for a product decision.
 **Reviewed at:** `335a9c9a6` (105 files, +9,688 / −178, 36 commits). `yarn.lock` excluded from line review.
-**Validation suite:** Skipped (user opted out).
+**Validation suite:** Skipped in the original review; run on 8 Oct 2026 after the PP-2223 fixes (see Validation Checks).
 
 ---
 
@@ -47,37 +47,37 @@ All fixes are on `feature/PP-2223-pdf-markup-follow-up`, pushed. Each was checke
 
 ## What this means for users (non-technical summary)
 
-1. **An editor can lose their restored marks for good.** Say an editor reopens a PDF job that has autosaved marks, closes the viewer while it is still loading, and submits. The job goes in without those marks, and the marks cannot be recovered afterwards.
-2. **Some scanned PDFs open sideways.** A scanned document with no text layer, which normally displays upright, is turned the wrong way in the viewer.
-3. **Password- or permission-protected PDFs with any marks on them can no longer be submitted.** The error tells the editor to use the in-browser editor, and that route hits the same refusal.
-4. **The viewer can spin forever.** If Adobe's viewer fails to start, or the download stalls, the editor sees a loading screen with no error and is never switched to download-and-upload.
-5. **The claim that the PDF is never exposed by a public link does not hold.** Opening the viewer still sends the browser a temporary direct-download link to the file. Other screens on develop already do this, so the exposure is not new, but this PR's security claim and ticket rule 3 are not met.
+1. **An editor can lose their restored marks for good.** Say an editor reopens a PDF job that has autosaved marks, closes the viewer while it is still loading, and submits. The job goes in without those marks, and the marks cannot be recovered afterwards. *Now fixed: submit waits for the restore, or refuses while the document is opening.*
+2. **Some scanned PDFs open sideways.** A scanned document with no text layer, which normally displays upright, is turned the wrong way in the viewer. *Now fixed: a scanned page keeps its own rotation.*
+3. **Permission-protected (encrypted) PDFs with any marks on them can no longer be submitted.** The error tells the editor to use the in-browser editor, and that route hits the same refusal. *Still open: waiting for a product decision (Issue 5).*
+4. **The viewer can spin forever.** If Adobe's viewer fails to start, or the download stalls, the editor sees a loading screen with no error and is never switched to download-and-upload. *Now fixed: after 60 s the editor is offered download-and-upload.*
+5. **The claim that the PDF is never exposed by a public link does not hold.** Opening the viewer still sends the browser a temporary direct-download link to the file. Other screens on develop already do this, so the exposure is not new, but this PR's security claim and ticket rule 3 are not met. *Left as is, by decision; the false claim is corrected.*
 
 ---
 
 ## Jira Requirements vs Implementation
 
 
-| Jira Requirement                                                                                               | PR Implementation                                                                                                                                       | Status          |
-| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
-| 1. PDF jobs open in an embedded Adobe viewer, via a button, for PDF jobs only                                  | `PdfContentPill` + `PdfViewerModal`, gated by `usePdfSubmissionMode` (`isPdf`)                                                                          | ✅               |
-| 2. "Trouble with the editor?" / "Prefer to edit in your browser?" toggle; marks kept on switch (agreed 28 Sep) | `PdfSubmissionModeLink`, mode state in `usePdfSubmissionMode`, viewer kept mounted                                                                      | ✅               |
-| 3. Embed only for PDFs under 50 MB                                                                             | `PDF_EMBED_SIZE_CEILING_BYTES`; route returns 413 and the client falls back                                                                             | ✅               |
-| 4. Annotation tools on, existing annotations editable, download available, fit-width                           | `config/adobeEmbed.ts` viewer options                                                                                                                   | ✅               |
-| 5.1.1 Pre-existing (original) annotations keep their metadata                                                  | Authors kept via `readOriginalPdfAuthors`. But `ensureAnnotationDates` rewrites legal-but-short or hex dates and adds dates to links/widgets (Issue 11) | ⚠️ Partial      |
-| 5.1.2 New annotations labelled "Proofed" for the customer                                                      | `stripPdfInternalAuthors` on every server submit path                                                                                                   | ✅               |
-| 5.2 Internal labels by role for internal users                                                                 | `EditedCopyInternal` + role labels. AI labels deferred by agreement (comment 76970)                                                                     | ✅ (scoped)      |
-| 6.1 Each submission stores the whole PDF with customer annotations                                             | EditedCopy written on submit                                                                                                                            | ✅               |
-| 6.2 Autosave after each annotation so progress is never lost                                                   | `PdfAnnotations` drafts, 20 s debounce, minimise/beacon/flush. Gaps in Issues 1, 9, 10                                                                  | ⚠️ Partial      |
-| 7. Pages shown in correct orientation (≥20 chars / 60% rule)                                                   | `rotationDetect.ts` implements the rule correctly for text pages, but undoes /Rotate on text-less scans (Issue 2)                                       | ⚠️ Partial      |
-| 8. Editor job history unchanged                                                                                | Internal and draft versions excluded via `workItemContentVersionRules`. Verified unchanged                                                              | ✅               |
-| 9. Admin view unchanged                                                                                        | Admin UI unchanged (Fallback state). Server-side, admin submit-on-behalf now also stores an internal copy and rewrites authors (see Open Questions)     | ⚠️ Partial      |
-| Rule: over-ceiling PDF shows the fallback                                                                      | 413 → fallback                                                                                                                                          | ✅               |
-| Rule: PDF never served from a public URL                                                                       | `/pdf` route streams bytes, but the seed lookup still returns the SAS URL (Issue 4)                                                                     | ❌               |
-| Rule: a save built on a stale version is never accepted                                                        | Client guard exists but can never match (Issue 8). OMS enforces "latest version belongs to job" on submit                                               | ⚠️ Partial      |
-| Rule: a file is never rotated twice                                                                            | Correction subtracts `page.rotate`; verified                                                                                                            | ✅               |
-| Rule: an unreadable file never wipes existing comments                                                         | pdf-lib failure falls back without rewriting                                                                                                            | ✅               |
-| Rule: the client never receives a file showing an editor's real name                                           | Strip runs on all paths. Deliberate pass-through when both parsers fail (Open Questions)                                                                | ✅ (with caveat) |
+| Jira Requirement                                                                                               | PR Implementation                                                                                                                                       | Status          | After PP-2223 |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --- |
+| 1. PDF jobs open in an embedded Adobe viewer, via a button, for PDF jobs only                                  | `PdfContentPill` + `PdfViewerModal`, gated by `usePdfSubmissionMode` (`isPdf`)                                                                          | ✅               | ✅ |
+| 2. "Trouble with the editor?" / "Prefer to edit in your browser?" toggle; marks kept on switch (agreed 28 Sep) | `PdfSubmissionModeLink`, mode state in `usePdfSubmissionMode`, viewer kept mounted                                                                      | ✅               | ✅ |
+| 3. Embed only for PDFs under 50 MB                                                                             | `PDF_EMBED_SIZE_CEILING_BYTES`; route returns 413 and the client falls back                                                                             | ✅               | ✅ |
+| 4. Annotation tools on, existing annotations editable, download available, fit-width                           | `config/adobeEmbed.ts` viewer options                                                                                                                   | ✅               | ✅ |
+| 5.1.1 Pre-existing (original) annotations keep their metadata                                                  | Authors kept via `readOriginalPdfAuthors`. But `ensureAnnotationDates` rewrites legal-but-short or hex dates and adds dates to links/widgets (Issue 11) | ⚠️ Partial      | ✅ dates kept (Issue 11); authors kept, server read fixed (`25171d256`) |
+| 5.1.2 New annotations labelled "Proofed" for the customer                                                      | `stripPdfInternalAuthors` on every server submit path                                                                                                   | ✅               | ✅ |
+| 5.2 Internal labels by role for internal users                                                                 | `EditedCopyInternal` + role labels. AI labels deferred by agreement (comment 76970)                                                                     | ✅ (scoped)      | ✅ (scoped) |
+| 6.1 Each submission stores the whole PDF with customer annotations                                             | EditedCopy written on submit                                                                                                                            | ✅               | ✅ |
+| 6.2 Autosave after each annotation so progress is never lost                                                   | `PdfAnnotations` drafts, 20 s debounce, minimise/beacon/flush. Gaps in Issues 1, 9, 10                                                                  | ⚠️ Partial      | ✅ gaps closed (Issues 1, 9, 10) |
+| 7. Pages shown in correct orientation (≥20 chars / 60% rule)                                                   | `rotationDetect.ts` implements the rule correctly for text pages, but undoes /Rotate on text-less scans (Issue 2)                                       | ⚠️ Partial      | ✅ text-less scans fixed (Issue 2) |
+| 8. Editor job history unchanged                                                                                | Internal and draft versions excluded via `workItemContentVersionRules`. Verified unchanged                                                              | ✅               | ✅ |
+| 9. Admin view unchanged                                                                                        | Admin UI unchanged (Fallback state). Server-side, admin submit-on-behalf now also stores an internal copy and rewrites authors (see Open Questions)     | ⚠️ Partial      | ⚠️ unchanged (Open Questions) |
+| Rule: over-ceiling PDF shows the fallback                                                                      | 413 → fallback                                                                                                                                          | ✅               | ✅ |
+| Rule: PDF never served from a public URL                                                                       | `/pdf` route streams bytes, but the seed lookup still returns the SAS URL (Issue 4)                                                                     | ❌               | ⏭️ skipped by decision (Issue 4) |
+| Rule: a save built on a stale version is never accepted                                                        | Client guard exists but can never match (Issue 8). OMS enforces "latest version belongs to job" on submit                                               | ⚠️ Partial      | ✅ guard fixed (Issue 8) |
+| Rule: a file is never rotated twice                                                                            | Correction subtracts `page.rotate`; verified                                                                                                            | ✅               | ✅ |
+| Rule: an unreadable file never wipes existing comments                                                         | pdf-lib failure falls back without rewriting                                                                                                            | ✅               | ✅ |
+| Rule: the client never receives a file showing an editor's real name                                           | Strip runs on all paths. Deliberate pass-through when both parsers fail (Open Questions)                                                                | ✅ (with caveat) | ✅ (with caveat); encrypted files open (Issue 5) |
 
 
 **Scope beyond the ticket:**
@@ -815,61 +815,51 @@ Re-run on `feature/PP-2223-pdf-markup-follow-up` on 8 Oct 2026, after the PP-222
 
 ## Tests
 
-- ✅ Substantial new unit tests: `usePdfAnnotationDrafts` (868 lines), `PdfViewerModal/hooks`, `getWorkItemContentVersionPdf`, `strip`/`store`/`readOriginal*`, shared pdf utils, `workItemContentVersionRules`, `env.test.ts`.
-- ❌ No tests for `restampPdfIdentifier`, the streaming submit branch, `getJobActionErrorMessage`, `fetchWorkItemContentVersionPdf` or `rotationMapCache` eviction (Issue 18).
-- ❌ Missing edge cases, each of which would have caught a confirmed bug: text-less or pre-rotated PDFs (Issue 2), encrypted + role label (Issue 5), AxiosError-shaped rejection (Issue 8), replies in the draft (Issue 7), submit before restore (Issue 1).
-- ⚠️ pdfjs is mocked in the route tests, and nothing exercises the production bundle (Open Question 1).
-- ⏭️ Validation suite not run (user opted out).
+- ✅ Substantial unit tests from PP-2176, plus new tests with every PP-2223 fix.
+- ✅ The gaps Issue 18 listed are covered: `restampPdfIdentifier`, both submit branches (`processPdfSubmission`), `fetchWorkItemContentVersionPdf`, cache eviction (`createBoundedCache`), text-less and pre-rotated PDFs read through pdfjs, AxiosError-shaped stale rejections, replies in the draft, and submit before restore.
+- ✅ Each test that guards a confirmed bug was shown failing on the old code first.
+- ✅ The production build was exercised: the pdfjs worker failure was reproduced, fixed and re-checked in a build (`25171d256`).
+- ⏳ Encrypted + marked upload (Issue 5) waits for the product decision.
 
 ### Suggested manual QA script
 
-1. **(Issue 1)** Autosave some marks, reload, open the viewer, collapse it immediately, and submit. The submitted file must contain the marks, or submit must refuse until the document is ready.
-2. **(Issue 2)** Open an image-only scan whose pages carry `/Rotate 90`. It must display upright.
-3. **(Issue 3)** After an in-browser submit, the next assignee downloads the EditedCopy, adds a comment in Acrobat and uploads it with the fallback. It must be accepted.
-4. **(Issue 4)** Open the viewer with DevTools open. No response may contain a `blob.core.windows.net` SAS URL.
-5. **(Issue 5)** Submit an encrypted PDF with one comment, both via the fallback and in the browser. It must not be refused, or the message must offer a working alternative.
-6. **(Issue 6)** Set a wrong-domain Adobe client ID. The viewer must fail over to download-and-upload within a reasonable time.
-7. **(Issue 7)** As a reviewer, reply to a comment, wait 25 s and reload. The reply must be restored under its parent.
-8. **(Issues 9, 10)** Add a mark, then within 20 s either switch to download-and-upload or close the tab. On return, the mark must be restored.
-9. **(Issue 11)** A PDF with hyperlinks and short-form comment dates keeps its original dates in the delivered file.
-10. **(Issue 17)** Open a DOCX job with the client ID set. The Network tab must show no `acrobatservices.adobe.com` request.
-11. **(Req 3)** A PDF over 50 MB shows download-and-upload only.
-12. **(Req 5.1.2)** The customer download shows "Proofed" on every Proofed mark and keeps the original customer authors.
+1. **(Issue 1)** Autosave some marks, reload, open the viewer, collapse it immediately, and submit. The submitted file must contain the marks, or submit must refuse until the document is ready. **Result:** ✅ marks restored after reload and kept on submit (order 21773).
+2. **(Issue 2)** Open an image-only scan whose pages carry `/Rotate 90`. It must display upright. **Result:** ✅ unit tests on real PDFs; not run by hand.
+3. **(Issue 3)** After an in-browser submit, the next assignee downloads the EditedCopy, adds a comment in Acrobat and uploads it with the fallback. It must be accepted. **Result:** ✅ identifier present in the customer copy after the strip (order 21774).
+4. **(Issue 4)** Open the viewer with DevTools open. No response may contain a `blob.core.windows.net` SAS URL. **Result:** ⏭️ skipped by decision.
+5. **(Issue 5)** Submit an encrypted PDF with one comment, both via the fallback and in the browser. It must not be refused, or the message must offer a working alternative. **Result:** ⏳ open; Adobe blocks mark-up on encrypted files (order 21772).
+6. **(Issue 6)** Set a wrong-domain Adobe client ID. The viewer must fail over to download-and-upload within a reasonable time. **Result:** ✅ unit tests (60 s message); not run by hand.
+7. **(Issue 7)** As a reviewer, reply to a comment, wait 25 s and reload. The reply must be restored under its parent. **Result:** ✅ unit tests; not run by hand.
+8. **(Issues 9, 10)** Add a mark, then within 20 s either switch to download-and-upload or close the tab. On return, the mark must be restored. **Result:** ✅ unit tests; reload restore checked by hand (order 21773).
+9. **(Issue 11)** A PDF with hyperlinks and short-form comment dates keeps its original dates in the delivered file. **Result:** ✅ dates kept and link undated (orders 21768, 21773).
+10. **(Issue 17)** Open a DOCX job with the client ID set. The Network tab must show no `acrobatservices.adobe.com` request. **Result:** ✅ no Adobe script on an HTML job (job 25115).
+11. **(Req 3)** A PDF over 50 MB shows download-and-upload only. **Result:** ✅ unchanged from PP-2176.
+12. **(Req 5.1.2)** The customer download shows "Proofed" on every Proofed mark and keeps the original customer authors. **Result:** ✅ "Proofed" for ours, customer author kept (orders 21773, 21774); b2btest check due after deploy.
 
 ---
 
 ## Summary
 
-
-| Aspect           | Status                                                                                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Correctness      | ⚠️ One high (Issue 1) and several medium defects (Issues 2, 3, 5, 6, 7)                                                                                            |
-| Regression risk  | ⚠️ Medium: encrypted PDFs (Issue 5), all-submit error text (Issue 14), off-platform orders (Issue 15)                                                              |
-| Tests            | ⚠️ Extensive, but gaps line up with the confirmed bugs (Issue 18)                                                                                                  |
-| Accessibility    | ⚠️ Focus is not managed for the full-screen viewer (minor; the modal's dialog gaps predate this PR)                                                                |
-| Error handling   | ⚠️ No open timeout (Issue 6); orientation failure not reported (Issue 12)                                                                                          |
-| Security         | ⚠️ SAS URL still reaches the browser (Issue 4); client can write `EditedCopyInternal` (Issue 16). `/security` not yet run per PR checklist; required before merge. |
-| Code quality     | ⚠️ Comment volume and history narration; duplicated submit branch                                                                                                  |
-| Validation suite | ⏭️ Skipped (user opted out)                                                                                                                                        |
-| Mergeable state  | ✅ GitHub reports clean (validation not run)                                                                                                                        |
-
+| Aspect | Status after PP-2223 |
+| --- | --- |
+| Correctness | ✅ Issues 1, 2, 3, 6, 7 fixed; Issue 5 open for a product decision |
+| Regression risk | ✅ Low: error text (14) and off-platform orders (15) handled; encrypted PDFs (5) unchanged until decided |
+| Tests | ✅ Gaps from Issue 18 covered; full suites pass |
+| Accessibility | ⚠️ Focus in the full-screen viewer still not managed (minor, unchanged) |
+| Error handling | ✅ Open timeout message (6); orientation failures reported (12) |
+| Security | ✅ Internal copies refused from the browser (16) and hidden from customers (D5); SAS links left as is by decision (4). `/security` to run before the PR |
+| Code quality | ✅ Comments cleaned, submit branches merged, shared helpers reused |
+| Validation suite | ✅ Run 8 Oct 2026 (see Validation Checks) |
 
 ---
 
 ## Recommendation
 
-**Approve with suggestions.** No blocker-class finding was confirmed, but the High and the listed Mediums should be fixed before merge.
+**Ready for PR once Issue 5 is decided.** Every other finding is fixed, partly fixed with a reason, or skipped with a reason (see Fix status).
 
-Pre-merge asks:
+Before merge:
 
-1. **Fix Issue 1 (high):** make submit wait for, or refuse before, the viewer's restore, and add a test.
-2. **Fix Issue 3:** one shared PDF-processing helper used by both submit branches, with the restamp and a streaming-branch test.
-3. **Fix Issue 2:** skip rotation correction for text-less documents; add tests for pre-rotated and text-less PDFs.
-4. **Fix Issue 5:** don't refuse encrypted PDFs over our own role labels, and make the message offer a working way out.
-5. **Fix Issue 4:** stop reading `bytes` through the SAS-returning endpoint, and correct the PR description's security claim.
-6. **Fix Issue 6:** add an open timeout that falls back to download-and-upload.
-7. **Fix Issue 7:** keep reply parents when restoring.
-8. **Run `/security`** (unchecked in the PR) and a production build smoke test with one real PDF open and submit (pdfjs worker, Open Question 1).
-9. **Re-run validation** (`test` / `typecheck` / `lint` / `build`); it was skipped in this review.
-
-Follow-ups, can be separate PRs: Issues 8 to 19, especially Issue 12's server memory, Issue 18's test gaps and trimming the history-narrating comments.
+1. **Issue 5:** apply Adam's answer (encrypted PDFs skip the viewer for every job, and how names are handled on upload).
+2. **Merge develop** into the branch to pick up #2530 (the Header and SideNav test hangs).
+3. **Run `/security`** on the branch.
+4. **After deploy:** check on b2btest that a customer's comment keeps its author (the server pdfjs fix).
