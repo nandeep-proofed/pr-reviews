@@ -12,27 +12,27 @@
 
 All fixes are on `feature/PP-2223-pdf-markup-follow-up`, pushed. Each was checked with unit tests, typecheck, lint, a production build, and in the browser on localhost (test orders 21767 to 21775).
 
-| # | Issue | Status | Commit(s) |
-|---|---|---|---|
-| 1 | Submit before restore loses marks | Fixed: the seed file is handed over only after restore; submit refuses while the document is still opening | `1cc25488c` |
-| 2 | Text-less scans turned sideways | Fixed: pages are compared by the turn they need, own `/Rotate` first; under 20 characters nothing turns | `be543a90a` |
-| 3 | Order identifier not restamped on the main path | Fixed: one `processPdfSubmission` helper for both branches; restamp names the file a PDF | `19f0cac3c` |
-| 4 | SAS link reaches the browser | Not changed, by decision: other screens on develop already give signed-in users signed links. The false comments are corrected | `95768e37b` |
-| 5 | Encrypted PDFs refused at submit | **Open:** waiting for Adam (viewer skipped for encrypted files, and how to handle names on upload) | |
-| 6 | Viewer can load forever | Fixed: after 60 s a "taking longer than usual" message with the download-and-upload link; no auto-cancel | `1cc25488c` |
-| 7 | Restored replies lose their parent | Fixed: parents restored first, reply sources remapped, one refusal no longer sinks the rest | `1cc25488c` |
-| 8 | Stale-job guard never matches | Fixed: reads the AxiosError response body | `1cc25488c` |
-| 9 | Leaving without collapsing drops marks | Fixed: unsaved marks are saved on unmount | `1cc25488c` |
-| 10 | Quick saves dropped or out of date | Fixed: save on tab hide; on page close a recent snapshot is sent | `1cc25488c` |
-| 11 | Valid customer dates rewritten, links dated | Fixed: hex dates read, short dates written out in full with value and zone kept, links/popups/widgets skipped | `1c9c5a31f` |
-| 12 | PDF route performance | Partly fixed: failed orientation checks reported and cached, `responseLimit: false`. The memory part (dates cache, views not copies) is deferred | `c4736d57f` |
-| 13 | Extra PDF copies in the browser, download not cancelled | Fixed: dead refs removed, Adobe gets the buffer (submit file made first, since Adobe empties it), download aborted on leave | `3fd728d66` |
-| 14 | Raw server text in submit toasts | Resolved: no caller passes server text any more; the unused `getJobActionErrorMessage` is removed | `49cc7901a` |
-| 15 | Off-platform PDFs get an internal copy and can be refused | Fixed in part: no internal copy off platform, and the copy is stored only after the strip passes. The strip still runs off platform, on purpose: the job panel's PATCH submit sends that content to OMS (`patchJob.ts:215`) | `b171fc94e` |
-| 16 | Browser can store `EditedCopyInternal` | Fixed: the create route refuses it with 400 | `7a8fdedc9` |
-| 17 | Adobe script loads on every job | Fixed: loaded only for an active PDF job | `285de5e18` |
-| 18 | Missing tests | Fixed: tests added with every fix above, each shown failing on the old code where it guards a bug | all |
-| 19 | Conventions and code health | Fixed: rename, draft helpers moved to `utils/`, `apiRoutes` entry, shared helpers reused, one pdf-lib loader, `X-Rotations` honest, viewer brief matches the job panel, comments cleaned, made-up test ids, bounded caches. Skipped: duplicate `brief-eye.svg` (the wysiwyg package does not export its assets), `yarn bump-packages` and the `package.json` re-sort (merge-time process) | `df1c8c8a2` `c1f12ba87` `49cc7901a` `070688ab8` `ceb917eac` `c72a4f5f7` `95768e37b` `0bfa682f8` `a9e19b4c7` |
+| # | Issue | Status | Reason | Commit(s) |
+|---|---|---|---|---|
+| 1 | Submit before restore loses marks | ✅ Fixed | Submit waits for the restore, or refuses while the document is still opening. | `1cc25488c` |
+| 2 | Text-less scans turned sideways | ✅ Fixed | A scanned page keeps its own rotation; text-less files are never turned. | `be543a90a` |
+| 3 | Order identifier not restamped | ✅ Fixed | Both submit branches share one helper that restamps the identifier. | `19f0cac3c` |
+| 4 | SAS link reaches the browser | ⏭️ Skipped | Other screens already give signed-in users signed links; comments corrected. | `95768e37b` |
+| 5 | Encrypted PDFs refused at submit | ⏳ Open | Waiting for Adam: skip the viewer for encrypted files, and how to treat names on upload. |  |
+| 6 | Viewer can load forever | ✅ Fixed | After 60 s a "taking longer" message offers download-and-upload. | `1cc25488c` |
+| 7 | Restored replies lose their parent | ✅ Fixed | Replies are restored under their parent; one refusal no longer stops the rest. | `1cc25488c` |
+| 8 | Stale-job guard never matches | ✅ Fixed | The stale check reads the server's error text from the response. | `1cc25488c` |
+| 9 | Leaving without collapsing drops marks | ✅ Fixed | Unsaved marks are saved when the viewer closes. | `1cc25488c` |
+| 10 | Quick saves dropped or out of date | ✅ Fixed | Saves on tab hide; a recent snapshot is sent on page close. | `1cc25488c` |
+| 11 | Customer dates rewritten, links dated | ✅ Fixed | Customer dates are kept; links, popups and form fields are left alone. | `1c9c5a31f` |
+| 12 | PDF route performance | 🟡 Partly fixed | Failed orientation checks are reported and cached; the memory work is deferred. | `c4736d57f` |
+| 13 | Extra PDF copies, download not cancelled | ✅ Fixed | One copy of the PDF in the browser, and the download stops on leave. | `3fd728d66` |
+| 14 | Raw server text in submit toasts | ✅ Fixed | No server text reaches the toast; the unused helper is removed. | `49cc7901a` |
+| 15 | Off-platform PDFs get an internal copy | 🟡 Partly fixed | No internal copy off platform; the strip stays because that content still reaches OMS. | `b171fc94e` |
+| 16 | Browser can store `EditedCopyInternal` | ✅ Fixed | The create route refuses `EditedCopyInternal` with 400. | `7a8fdedc9` |
+| 17 | Adobe script loads on every job | ✅ Fixed | Adobe's script loads only for an active PDF job. | `285de5e18` |
+| 18 | Missing tests | ✅ Fixed | Tests added with every fix. | all |
+| 19 | Conventions and code health | ✅ Fixed | Code tidied to house rules; skipped the shared icon (not exported) and merge-time process items. | `df1c8c8a2` `c1f12ba87` `49cc7901a` `070688ab8` `ceb917eac` `c72a4f5f7` `95768e37b` `0bfa682f8` `a9e19b4c7` |
 
 **Open questions, answered:**
 - pdfjs in the production build: it did fail. The worker file was not traced into the standalone build, so every server read failed silently and customer comment authors were relabelled. Fixed in `25171d256`; needs one check on b2btest after deploy.
@@ -120,7 +120,7 @@ The problems are concentrated in three areas:
 
 ### 1. Submitting before the viewer finishes restoring sends the unmarked file and loses the draft
 
-> **PP-2223 status:** Fixed in PP-2223 (`1cc25488c`).
+> **PP-2223:** ✅ Fixed. Submit waits for the restore, or refuses while the document is still opening. (`1cc25488c`)
 
 **[File: apps/creative-portal/components/organisms/modals/PdfViewerModal/hooks.ts]**
 
@@ -166,7 +166,7 @@ const prepareForSubmit = async () => {
 
 ### 2. Text-less scanned PDFs with an existing page rotation are turned sideways
 
-> **PP-2223 status:** Fixed in PP-2223 (`be543a90a`).
+> **PP-2223:** ✅ Fixed. A scanned page keeps its own rotation; text-less files are never turned. (`be543a90a`)
 
 **[File: packages/shared/api/utils/pdf/rotationDetect.ts]**
 
@@ -199,7 +199,7 @@ if (documentWeights.size === 0 || totalChars < MIN_CHARS) return {};
 
 ### 3. The normal submit path never re-stamps the order identifier on the PDF
 
-> **PP-2223 status:** Fixed in PP-2223 (`19f0cac3c`).
+> **PP-2223:** ✅ Fixed. Both submit branches share one helper that restamps the identifier. (`19f0cac3c`)
 
 **[File: apps/creative-portal/api/utils/jobs/postAddWorkItemContentVersion.ts]**
 
@@ -245,7 +245,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 4. The viewer still exposes the PDF's direct SAS download link to the browser
 
-> **PP-2223 status:** Not changed, by decision; comments corrected (`95768e37b`).
+> **PP-2223:** ⏭️ Skipped. Other screens already give signed-in users signed links; comments corrected. (`95768e37b`)
 
 **[File: apps/creative-portal/hooks/usePdfJobSeedVersion.ts]**
 
@@ -280,7 +280,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 5. Encrypted PDFs with any marks are now refused at submit, and the error points at a route that fails the same way
 
-> **PP-2223 status:** Open: waiting for Adam.
+> **PP-2223:** ⏳ Open. Waiting for Adam: skip the viewer for encrypted files, and how to treat names on upload.
 
 **[File: apps/creative-portal/api/utils/jobs/stripPdfInternalAuthors.ts]**
 
@@ -316,7 +316,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 6. The viewer can stay on its loading screen forever, with no error and no fallback
 
-> **PP-2223 status:** Fixed in PP-2223 (`1cc25488c`).
+> **PP-2223:** ✅ Fixed. After 60 s a "taking longer" message offers download-and-upload. (`1cc25488c`)
 
 **[File: apps/creative-portal/components/organisms/modals/PdfViewerModal/hooks.ts]**
 
@@ -350,7 +350,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 7. Restored replies lose their parent comment, and one bad entry can sink the whole restore
 
-> **PP-2223 status:** Fixed in PP-2223 (`1cc25488c`).
+> **PP-2223:** ✅ Fixed. Replies are restored under their parent; one refusal no longer stops the rest. (`1cc25488c`)
 
 **[File: apps/creative-portal/hooks/usePdfAnnotationDrafts.ts]**
 
@@ -383,7 +383,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 8. The stale-job guard never matches in production, so a stale viewer keeps retrying and reporting
 
-> **PP-2223 status:** Fixed in PP-2223 (`1cc25488c`).
+> **PP-2223:** ✅ Fixed. The stale check reads the server's error text from the response. (`1cc25488c`)
 
 **[File: apps/creative-portal/hooks/usePdfAnnotationDrafts.ts]**
 
@@ -417,7 +417,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 9. Leaving the viewer without collapsing it drops the last unsaved marks from the recovery draft
 
-> **PP-2223 status:** Fixed in PP-2223 (`1cc25488c`).
+> **PP-2223:** ✅ Fixed. Unsaved marks are saved when the viewer closes. (`1cc25488c`)
 
 **[File: apps/creative-portal/hooks/usePdfAnnotationDrafts.ts]**
 
@@ -452,7 +452,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 10. The quick saves on minimise and tab close can be silently dropped or out of date
 
-> **PP-2223 status:** Fixed in PP-2223 (`1cc25488c`).
+> **PP-2223:** ✅ Fixed. Saves on tab hide; a recent snapshot is sent on page close. (`1cc25488c`)
 
 **[File: apps/creative-portal/hooks/usePdfAnnotationDrafts.ts]**
 
@@ -493,7 +493,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 11. Opening a PDF rewrites valid dates on the customer's existing comments and adds dates to links
 
-> **PP-2223 status:** Fixed in PP-2223 (`1c9c5a31f`).
+> **PP-2223:** ✅ Fixed. Customer dates are kept; links, popups and form fields are left alone. (`1c9c5a31f`)
 
 **[File: packages/shared/api/utils/pdf/ensureAnnotationDates.ts]**
 
@@ -522,7 +522,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 12. The PDF route re-parses and copies up to 50 MB on every open, and doesn't report or cache a failed orientation check
 
-> **PP-2223 status:** Partly fixed in PP-2223 (`c4736d57f`); memory part deferred.
+> **PP-2223:** 🟡 Partly fixed. Failed orientation checks are reported and cached; the memory work is deferred. (`c4736d57f`)
 
 **[File: apps/creative-portal/api/workItemContentVersion/[id]/pdf/getWorkItemContentVersionPdf.ts]**
 
@@ -561,7 +561,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 13. The viewer keeps several copies of the PDF in browser memory and never cancels its download
 
-> **PP-2223 status:** Fixed in PP-2223 (`3fd728d66`).
+> **PP-2223:** ✅ Fixed. One copy of the PDF in the browser, and the download stops on leave. (`3fd728d66`)
 
 **[File: apps/creative-portal/components/organisms/modals/PdfViewerModal/hooks.ts]**
 
@@ -587,7 +587,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 14. Submit failures on the jobs page now show raw server error text
 
-> **PP-2223 status:** Resolved in PP-2223 (`49cc7901a`).
+> **PP-2223:** ✅ Fixed. No server text reaches the toast; the unused helper is removed. (`49cc7901a`)
 
 **[File: apps/creative-portal/components/pages/jobs/utils.ts]**
 
@@ -609,7 +609,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 15. Off-platform PDF orders now get an internal copy and can be refused
 
-> **PP-2223 status:** Fixed in part in PP-2223 (`b171fc94e`); strip kept off platform on purpose.
+> **PP-2223:** 🟡 Partly fixed. No internal copy off platform; the strip stays because that content still reaches OMS. (`b171fc94e`)
 
 **[File: apps/creative-portal/api/utils/jobs/postAddWorkItemContentVersion.ts]**
 
@@ -631,7 +631,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 16. The public create-version endpoint now accepts `EditedCopyInternal` from the browser
 
-> **PP-2223 status:** Fixed in PP-2223 (`7a8fdedc9`).
+> **PP-2223:** ✅ Fixed. The create route refuses `EditedCopyInternal` with 400. (`7a8fdedc9`)
 
 **[File: apps/creative-portal/api/workItemContentVersion/createWorkItemContentVersion/schema.ts]**
 
@@ -653,7 +653,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 17. The Adobe viewer script is downloaded on every job panel, including non-PDF jobs
 
-> **PP-2223 status:** Fixed in PP-2223 (`285de5e18`).
+> **PP-2223:** ✅ Fixed. Adobe's script loads only for an active PDF job. (`285de5e18`)
 
 **[File: apps/creative-portal/hooks/usePdfSubmissionMode.ts]**
 
@@ -680,7 +680,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 18. Missing tests for new code (project rule)
 
-> **PP-2223 status:** Fixed in PP-2223: tests added with each fix.
+> **PP-2223:** ✅ Fixed. Tests added with every fix.
 
 **[File: multiple]**
 
@@ -711,7 +711,7 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ### 19. Conventions and code-health notes (CLAUDE.md, Cursor rules, naming, comments)
 
-> **PP-2223 status:** Fixed in PP-2223, with the skips listed in Fix status.
+> **PP-2223:** ✅ Fixed. Code tidied to house rules; skipped the shared icon (not exported) and merge-time process items.
 
 **[File: multiple]**
 
