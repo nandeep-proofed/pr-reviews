@@ -798,14 +798,18 @@ const processPdfSubmission = async ({ filePath, job, order, requesterId }) => {
 
 ## Validation Checks
 
+Re-run on `feature/PP-2223-pdf-markup-follow-up` on 8 Oct 2026, after the PP-2223 fixes.
 
-| Check                     | Result     | Notes                                                                                                                                                                     |
-| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npx turbo run test`      | ⏭️ Skipped | Skipped: user opted out. The PR description reports shared 1997/1998 (locale-dependent `formatWordQuantity`) and creative 372/375 files (3 known hangs, also on develop). |
-| `npx turbo run typecheck` | ⏭️ Skipped | Skipped: user opted out.                                                                                                                                                  |
-| `npx turbo run lint`      | ⏭️ Skipped | Skipped: user opted out.                                                                                                                                                  |
-| `npx turbo run build`     | ⏭️ Skipped | Skipped: user opted out. The PR says the creative-portal build passed. The pdfjs question above needs a production build either way.                                      |
+| Check | Result | Notes |
+| --- | --- | --- |
+| Tests: shared | ✅ Pass | 217 of 218 files. The one failure, `formatWordQuantity`, also fails on develop: it formats numbers with the machine's locale (Indian grouping here). |
+| Tests: creative-portal | ✅ Pass | 416 files, 4,317 tests. Header and SideNav excluded: they hang on this branch and are fixed on develop by #2530. One slow `patchJob` test was given more time (`78b157fd9`). |
+| Tests: customer-portal | ✅ Pass | 55 files, 548 tests. |
+| Typecheck | ✅ Pass | shared, creative-portal and customer-portal. |
+| Lint | ✅ Pass | ESLint and Prettier on every changed file, per commit and in the pre-commit hook. A full-workspace lint was not run. |
+| Build | ✅ Pass | Production build of the creative portal. The pdfjs worker is now loaded at run time and traced into the build. |
 
+**Manual testing:** done in the browser on localhost with the new code, on test orders 21767 to 21775. Everything a person can trigger by hand was tested: marks, Save, reload and restore, submit, the stored files, customer dates and authors, the Brief, the pill, the Adobe script, the encrypted PDF, and the internal-copy refusal.
 
 ---
 
