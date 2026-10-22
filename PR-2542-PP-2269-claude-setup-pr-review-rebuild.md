@@ -772,12 +772,12 @@ This is developer tooling, so QA means a developer on a Windows machine:
 
 ### Follow-up `/security-check` on `3985e53c6`
 
-Verdict **NEEDS ATTENTION**: 2 medium, 4 low, no critical or high. None of these is fixed yet; they await the author's decision.
+Verdict **NEEDS ATTENTION**: 2 medium, 4 low, no critical or high. **All 6 fixed in `8fc8d33eb` (21 Oct 2026)**; 183 automation tests pass. The two policy suggestions at the end were not adopted.
 
-- **Medium:** a tag push (`git push origin oms-…`, `git push --tags`, `HEAD:refs/tags/…`) deploys to devtest with no prompt, and the push guard only covers `develop`.
-- **Medium:** the suggestion check runs the PR's own ESLint and Prettier config, which is JavaScript, with the reviewer's user rights (token env vars are removed; `~/.ssh` and the `gh` keyring are not protected).
-- **Low:** the suggestion check follows a symlinked PR file when it writes.
-- **Low:** `gh-helpers.mjs edit-review` uploads any local file; only `edit-comment` is limited to `.pr-review/`.
-- **Low:** the push guard can be fooled by shell quoting (`dev""elop`).
-- **Low:** the secret scan misses `sk-ant-`, `sntrys_`, `ATATT3`, `npm_` and `ghr_` tokens.
-- **Suggested:** a narrow Bash allow-list for `review-lens` and `review-verifier`, and moving `git commit` / `git push` to `ask`. These are policy decisions.
+- ✅ **Medium:** a tag push (`git push origin oms-…`, `git push --tags`, `HEAD:refs/tags/…`) deployed to devtest with no prompt. Fixed: the push guard refuses deploy tags in every form and asks before other tags; `/release-tag` pushes its tag from its own script.
+- ✅ **Medium:** the suggestion check ran the PR's own ESLint and Prettier config. Fixed: the check is skipped when the PR changes ESLint, Prettier or Babel config, any `package.json` or `packages/eslint-config/` (verified on this PR: skipped).
+- ✅ **Low:** the suggestion check followed a symlinked PR file. Fixed: `realFileInside` refuses symlinked files and folders.
+- ✅ **Low:** `edit-review` uploaded any local file. Fixed: limited to `.pr-review/`, and no upload follows a symlink out of it.
+- ✅ **Low:** the push guard could be fooled by shell quoting. Fixed: quotes and backslashes are removed before matching, and `$` / backtick arguments are refused.
+- ✅ **Low:** the secret scan missed `sk-ant-`, `sntrys_`, `ATATT3`, `npm_` and `ghr_` tokens. Fixed, with no false positives in the repo.
+- ⏸️ **Suggested, not adopted:** a narrow Bash allow-list for `review-lens` and `review-verifier`, and moving `git commit` / `git push` to `ask`. Policy decisions, still open.
